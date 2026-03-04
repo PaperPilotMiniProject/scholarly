@@ -7,6 +7,8 @@ export interface JournalRanking {
   quartile: string;
   hjIndex: number;
   category: string;
+  // ability to hold multiple sources or fallback info
+  sources?: Record<string, any>;
 }
 
 /**
@@ -80,6 +82,7 @@ function convertToRankings(data: any[]): JournalRanking[] {
           quartile,
           hjIndex,
           category,
+          sources: { csvRow: row },
         });
       }
     } catch (error) {
