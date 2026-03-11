@@ -4,6 +4,8 @@ import { getGoogleScholarEnabled } from "../../src/utils/storage";
 import {
   loadSJRData,
   findRanking,
+  findRankingByIssn,
+  getIssnsByDoi,
   JournalRanking,
 } from "../../src/utils/csvParser";
 
@@ -27,6 +29,16 @@ function clearBadges(): void {
 }
 
 /**
+ * Extracts a DOI from a URL, e.g. https://www.pnas.org/doi/10.1073/pnas.xxx
+ */
+function extractDoi(link: string): string | null {
+  const match = link.match(/\b(10\.\d{4,}\/\S+)/);
+  if (!match) return null;
+  // strip trailing punctuation that may have been captured
+  return match[1].replace(/[.,;)\]]+$/, "");
+}
+
+/**
  * Collects all visible article results from a Google Scholar search page with journal rankings.
  */
 async function scrapeArticles(): Promise<void> {
@@ -34,55 +46,51 @@ async function scrapeArticles(): Promise<void> {
   console.log("[Scholarly] Starting Google Scholar scrape...");
 
   try {
-    // Load SJR rankings data
-    console.log("[Scholarly] About to load SJR rankings...");
     const rankings = await loadSJRData();
-    console.log(
-      `[Scholarly] Finished loading. Total rankings loaded: ${rankings.length}`,
-    );
+    console.log(`[Scholarly] Rankings loaded: ${rankings.length}`);
     if (rankings.length === 0) {
       console.warn(
         "[Scholarly] No rankings data loaded - CSV may not be accessible",
       );
-    } else {
-      console.log(
-        "[Scholarly] Sample rankings:",
-        rankings.slice(0, 3).map((r) => `${r.rank}. ${r.title}`),
-      );
     }
 
-    const collected: Article[] = [];
+    // ── Phase 1: collect DOM data synchronously ──────────────────────────────
+    type ArticleData = {
+      titleEl: HTMLElement;
+      title: string;
+      link: string;
+      doi: string | null;
+      journal: string;
+      year: string;
+      citations: number;
+    };
 
-    // Google Scholar uses .gs_r for result rows and .gs_rt for the title/link container
     const results = document.querySelectorAll(".gs_r");
     console.log(`[Scholarly] Found ${results.length} result containers`);
+    const articles: ArticleData[] = [];
 
     results.forEach((row, index) => {
       try {
         const titleEl = row.querySelector(".gs_rt") as HTMLElement | null;
-        if (!titleEl) {
-          console.log(`[Scholarly] Result ${index}: No title element found`);
-          return;
-        }
+        if (!titleEl) return;
 
         const title = titleEl.innerText.trim();
+        if (!title) return;
+
         const linkEl = titleEl.querySelector("a") as HTMLAnchorElement | null;
         const link = linkEl ? linkEl.href : "";
+        const doi = extractDoi(link);
 
-        // Extract journal, year and citation count from source info
         let journal = "";
         let year = "";
         let citations = 0;
+
         const sourceEl = row.querySelector(".gs_a") as HTMLElement | null;
         if (sourceEl) {
           const sourceText = sourceEl.innerText;
-          console.log(
-            `[Scholarly] Raw source text for result ${index}: "${sourceText}"`,
-          );
+          console.log(`[Scholarly] Source text [${index}]: "${sourceText}"`);
 
-          // citation link in .gs_fl
-          const fl = row.querySelectorAll(".gs_fl a");
-          fl.forEach((a) => {
+          row.querySelectorAll(".gs_fl a").forEach((a) => {
             const t = a.textContent || "";
             if (t.startsWith("Cited by")) {
               const num = parseInt(t.replace(/[^0-9]/g, ""), 10);
@@ -90,13 +98,8 @@ async function scrapeArticles(): Promise<void> {
             }
           });
 
-          // Try to extract journal from the source text
-          // Format can be: "Authors - Journal - Year" or "Authors - [Journal abbreviation]"
-          // or sometimes just: "Authors, Journal, Year"
           let parts = sourceText.split(" - ");
-
           if (parts.length >= 2) {
-            // ...same as before
             let potentialJournal = parts[1].trim();
             potentialJournal = potentialJournal
               .replace(/,?\s*\d{4}\s*$/, "")
@@ -104,87 +107,111 @@ async function scrapeArticles(): Promise<void> {
             potentialJournal = potentialJournal.replace(/,+$/, "").trim();
             journal = potentialJournal;
             const yearMatch = sourceText.match(/\b(19|20)\d{2}\b/);
-            if (yearMatch) {
-              year = yearMatch[0];
-            }
+            if (yearMatch) year = yearMatch[0];
           } else {
             parts = sourceText.split(",");
             if (parts.length >= 2) {
-              journal = parts[1].trim();
-              journal = journal.replace(/,?\s*\d{4}\s*$/, "").trim();
+              journal = parts[1]
+                .trim()
+                .replace(/,?\s*\d{4}\s*$/, "")
+                .trim();
             }
           }
-
-          console.log(
-            `[Scholarly] Extracted journal: "${journal}", year: "${year}", citations: ${citations}`,
-          );
         }
 
-        if (title) {
-          const article: Article = {
-            title,
-            link,
-            journal,
-            year,
-            citations,
-            extra: {},
-          };
-
-          // Find ranking for this journal
-          if (journal && rankings.length > 0) {
-            console.log(
-              `[Scholarly] Searching for ranking: journal="${journal}", rankings available=${rankings.length}`,
-            );
-            const ranking = findRanking(journal, rankings);
-            if (ranking) {
-              article.ranking = ranking;
-              console.log(
-                `[Scholarly] ✓ Article ${collected.length + 1}: "${title.substring(0, 50)}..." | Journal: ${journal} | Rank: ${ranking.rank} (SJR: ${ranking.sjr}, Q${ranking.quartile})`,
-              );
-              // inject DOM badge for ranking and citations
-              const badge = document.createElement("span");
-              badge.className = "scholarly-badge";
-              badge.style.cssText =
-                "margin-left:8px;padding:2px 4px;background:#ffeb3b;color:#000;font-size:10px;border-radius:3px;";
-              badge.textContent = `SJR ${ranking.sjr} (Q${ranking.quartile})`;
-              titleEl.appendChild(badge);
-              if (citations) {
-                const citeBadge = document.createElement("span");
-                citeBadge.className = "scholarly-badge";
-                citeBadge.style.cssText =
-                  "margin-left:4px;padding:2px 4px;background:#c8e6c9;color:#000;font-size:10px;border-radius:3px;";
-                citeBadge.textContent = `Cited by ${citations}`;
-                titleEl.appendChild(citeBadge);
-              }
-            } else {
-              console.log(
-                `[Scholarly] ✗ Article ${collected.length + 1}: "${title.substring(0, 50)}..." | Journal: ${journal} | Ranking: NOT FOUND`,
-              );
-            }
-          } else {
-            console.warn(
-              `[Scholarly] ⚠ Article ${collected.length + 1}: Cannot search for ranking - journal="${journal}", rankings=${rankings.length}`,
-            );
-          }
-
-          collected.push(article);
-        }
+        articles.push({ titleEl, title, link, doi, journal, year, citations });
       } catch (error) {
         console.error(`[Scholarly] Error parsing result ${index}:`, error);
       }
     });
 
-    console.log(`[Scholarly] Total articles scraped: ${collected.length}`);
-    console.log("[Scholarly] Full data:", collected);
+    // ── Phase 2: parallel CrossRef ISSN lookups ───────────────────────────────
+    const issnResults = await Promise.all(
+      articles.map((a) =>
+        a.doi ? getIssnsByDoi(a.doi) : Promise.resolve(null),
+      ),
+    );
 
-    // Display summary
-    if (collected.length > 0) {
-      const withRanking = collected.filter((a) => a.ranking).length;
-      const withoutRanking = collected.length - withRanking;
-      console.log(
-        `[Scholarly] Summary: ${withRanking} articles with rankings, ${withoutRanking} without`,
-      );
-    }
+    // ── Phase 3: match rankings and inject badges ─────────────────────────────
+    const collected: Article[] = [];
+
+    articles.forEach((a, i) => {
+      const issns = issnResults[i];
+      let ranking: JournalRanking | null = null;
+
+      // Try ISSN-based match first (exact, no false positives)
+      if (issns && issns.length > 0 && rankings.length > 0) {
+        ranking = findRankingByIssn(issns, rankings);
+        if (ranking) {
+          console.log(
+            `[Scholarly] ✓ ISSN match [${i}]: "${a.title.substring(0, 50)}" → ${ranking.title}`,
+          );
+        }
+      }
+
+      // Fall back to title-based match when no DOI / CrossRef returned nothing
+      // But SKIP if journal name looks truncated or suspiciously short
+      const isJournalNameReliable =
+        a.journal.length > 5 && !a.journal.endsWith("...");
+      if (
+        !ranking &&
+        a.journal &&
+        rankings.length > 0 &&
+        isJournalNameReliable
+      ) {
+        console.log(
+          `[Scholarly] Attempting fuzzy match for journal: "${a.journal}"`,
+        );
+        ranking = findRanking(a.journal, rankings);
+        if (ranking) {
+          console.log(
+            `[Scholarly] ✓ Title match [${i}]: "${a.title.substring(0, 50)}" | "${a.journal}" → ${ranking.title} (ISSN: ${ranking.issns?.join(", ") || "none"})`,
+          );
+        } else {
+          console.log(`[Scholarly] ✗ No match [${i}]: journal="${a.journal}"`);
+        }
+      } else if (!ranking && a.journal) {
+        console.log(
+          `[Scholarly] ⚠ Skipped fuzzy match [${i}]: journal name too short/incomplete: "${a.journal}"`,
+        );
+      }
+
+      const article: Article = {
+        title: a.title,
+        link: a.link,
+        journal: a.journal,
+        year: a.year,
+        citations: a.citations,
+        ranking: ranking ?? undefined,
+        extra: {},
+      };
+
+      if (ranking) {
+        const badge = document.createElement("span");
+        badge.className = "scholarly-badge";
+        badge.style.cssText =
+          "margin-left:8px;padding:2px 4px;background:#ffeb3b;color:#000;font-size:10px;border-radius:3px;";
+        badge.textContent = `SJR ${ranking.sjr} (Q${ranking.quartile})`;
+        a.titleEl.appendChild(badge);
+
+        if (a.citations) {
+          const citeBadge = document.createElement("span");
+          citeBadge.className = "scholarly-badge";
+          citeBadge.style.cssText =
+            "margin-left:4px;padding:2px 4px;background:#c8e6c9;color:#000;font-size:10px;border-radius:3px;";
+          citeBadge.textContent = `Cited by ${a.citations}`;
+          a.titleEl.appendChild(citeBadge);
+        }
+      }
+
+      collected.push(article);
+    });
+
+    const withRanking = collected.filter((a) => a.ranking).length;
+    console.log(
+      `[Scholarly] Done: ${collected.length} articles, ${withRanking} with rankings, ${collected.length - withRanking} without`,
+    );
+    console.log("[Scholarly] Full data:", collected);
   } catch (error) {
     console.error("[Scholarly] Error during scraping:", error);
   }
