@@ -19,9 +19,18 @@ interface Article {
 }
 
 /**
+ * Removes all ranking badges injected by Scholarly from the page.
+ */
+function clearBadges(): void {
+  document.querySelectorAll(".scholarly-badge").forEach((el) => el.remove());
+  console.log("[Scholarly] Badges cleared");
+}
+
+/**
  * Collects all visible article results from a Google Scholar search page with journal rankings.
  */
 async function scrapeArticles(): Promise<void> {
+  clearBadges();
   console.log("[Scholarly] Starting Google Scholar scrape...");
 
   try {
@@ -134,12 +143,14 @@ async function scrapeArticles(): Promise<void> {
               );
               // inject DOM badge for ranking and citations
               const badge = document.createElement("span");
+              badge.className = "scholarly-badge";
               badge.style.cssText =
                 "margin-left:8px;padding:2px 4px;background:#ffeb3b;color:#000;font-size:10px;border-radius:3px;";
               badge.textContent = `SJR ${ranking.sjr} (Q${ranking.quartile})`;
               titleEl.appendChild(badge);
               if (citations) {
                 const citeBadge = document.createElement("span");
+                citeBadge.className = "scholarly-badge";
                 citeBadge.style.cssText =
                   "margin-left:4px;padding:2px 4px;background:#c8e6c9;color:#000;font-size:10px;border-radius:3px;";
                 citeBadge.textContent = `Cited by ${citations}`;
@@ -202,7 +213,8 @@ function init(): void {
       console.log("[Scholarly] Scraping is enabled, starting scrape...");
       await scrapeArticles();
     } else {
-      console.log("[Scholarly] Scraping is disabled");
+      console.log("[Scholarly] Scraping is disabled, clearing badges...");
+      clearBadges();
     }
   };
 
@@ -240,4 +252,4 @@ function init(): void {
   }
 }
 
-export { init, scrapeArticles };
+export { init, scrapeArticles, clearBadges };

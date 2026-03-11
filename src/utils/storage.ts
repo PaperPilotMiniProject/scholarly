@@ -29,14 +29,21 @@ export function getGoogleScholarEnabled(): Promise<boolean> {
   return new Promise((resolve) => {
     if (chrome && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(["googleScholarEnabled"], (result) => {
-        resolve(Boolean(result.googleScholarEnabled));
+        // Default to enabled if the value has never been set.
+        const enabled = result.googleScholarEnabled;
+        resolve(enabled === undefined ? true : Boolean(enabled));
       });
     } else {
       try {
-        const val = JSON.parse(localStorage.getItem("googleScholarEnabled") ?? "false");
+        const stored = localStorage.getItem("googleScholarEnabled");
+        if (stored === null) {
+          resolve(true);
+          return;
+        }
+        const val = JSON.parse(stored);
         resolve(Boolean(val));
       } catch (e) {
-        resolve(false);
+        resolve(true);
       }
     }
   });
