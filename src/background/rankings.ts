@@ -1,193 +1,7 @@
 /// <reference types="chrome" />
 
-interface JournalRanking {
-  rank: number;
-  title: string;
-  issns: string[];
-  sjr: number;
-  quartile: string;
-  hjIndex: number;
-  category: string;
-}
-
-let cachedRankings: JournalRanking[] | null = null;
-
-/**
- * Loads the SJR CSV file and parses it
- */
-async function loadRankings(): Promise<JournalRanking[]> {
-  if (cachedRankings) {
-    console.log("[Scholarly BG] Returning cached rankings");
-    return cachedRankings;
-  }
-
-  try {
-    console.log("[Scholarly BG] Loading SJR rankings from CSV...");
-    const csvUrl = chrome.runtime.getURL("data/scimagojr 2024.csv");
-    console.log(`[Scholarly BG] Fetching from: ${csvUrl}`);
-
-    const response = await fetch(csvUrl);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const csvContent = await response.text();
-    console.log(`[Scholarly BG] CSV loaded, size: ${csvContent.length} bytes`);
-    console.log("[Scholarly BG] Parsing CSV...");
-
-    cachedRankings = parseCSV(csvContent);
-    console.log(
-      `[Scholarly BG] Parsed ${cachedRankings.length} journal rankings`,
-    );
-
-    if (cachedRankings.length > 0) {
-      console.log(
-        "[Scholarly BG] Sample:",
-        cachedRankings.slice(0, 2).map((r) => `${r.rank}. ${r.title}`),
-      );
-    }
-
-    return cachedRankings;
-  } catch (error) {
-    console.error("[Scholarly BG] Error loading rankings:", error);
-    return [];
-  }
-}
-
-/**
- * Parses semicolon-delimited CSV with proper quoted field handling
- */
-function parseCSV(content: string): JournalRanking[] {
-  const lines = content.split("\n");
-  if (lines.length < 2) {
-    console.error("[Scholarly BG] CSV has less than 2 lines");
-    return [];
-  }
-
-  // Parse header line
-  const headerLine = lines[0];
-  const headers = parseCSVLine(headerLine);
-
-  const rankIndex = headers.indexOf("Rank");
-  const titleIndex = headers.indexOf("Title");
-  const issnIndex = headers.indexOf("Issn");
-  const sjrIndex = headers.indexOf("SJR");
-  const quartileIndex = headers.indexOf("SJR Best Quartile");
-  const hIndexIndex = headers.indexOf("H index");
-  const categoriesIndex = headers.indexOf("Categories");
-
-  if (
-    rankIndex === -1 ||
-    titleIndex === -1 ||
-    sjrIndex === -1 ||
-    quartileIndex === -1
-  ) {
-    console.error(
-      "[Scholarly BG] CSV headers not found. Found:",
-      headers.slice(0, 5),
-    );
-    return [];
-  }
-
-  const rankings: JournalRanking[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-
-    try {
-      const row = parseCSVLine(lines[i]);
-      if (row.length === 0) continue;
-
-      const rank = parseInt(row[rankIndex] || "0", 10);
-      const title = (row[titleIndex] || "").replace(/^"(.*)"$/, "$1");
-      const issnRaw = (row[issnIndex] || "").replace(/^"(.*)"$/, "$1");
-      const issns = issnRaw
-        .split(",")
-        .map((s) => s.trim().replace(/-/g, ""))
-        .filter(Boolean);
-      const sjrStr = (row[sjrIndex] || "").replace(/,/, ".");
-      const sjr = parseFloat(sjrStr);
-      const quartile = (row[quartileIndex] || "").trim();
-      const hjIndex = parseInt(row[hIndexIndex] || "0", 10);
-      const category = (row[categoriesIndex] || "").replace(/^"(.*)"$/, "$1");
-
-      if (title && !isNaN(sjr)) {
-        rankings.push({
-          rank,
-          title,
-          issns,
-          sjr,
-          quartile,
-          hjIndex,
-          category,
-        });
-      }
-    } catch (error) {
-      if (i < 5) {
-        console.error(`[Scholarly BG] Error parsing line ${i}:`, error);
-      }
-    }
-  }
-
-  return rankings;
-}
-
-/**
- * Parses a CSV line handling quoted fields with semicolon delimiters
- */
-function parseCSVLine(line: string): string[] {
-  const result: string[] = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    const nextChar = line[i + 1];
-
-    if (char === '"') {
-      if (inQuotes && nextChar === '"') {
-        // Escaped quote
-        current += '"';
-        i++;
-      } else {
-        // Toggle quote mode
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ";" && !inQuotes) {
-      // Field separator (outside quotes)
-      result.push(current.trim());
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-
-  // Add final field
-  result.push(current.trim());
-  return result;
-}
-
-/**
- * Message handler for loading rankings from content script
- */
 if (chrome && chrome.runtime) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === "LOAD_RANKINGS") {
-      console.log("[Scholarly BG] Received LOAD_RANKINGS request");
-      loadRankings()
-        .then((rankings) => {
-          console.log(
-            `[Scholarly BG] Sending ${rankings.length} rankings to content script`,
-          );
-          sendResponse({ success: true, data: rankings });
-        })
-        .catch((error) => {
-          console.error("[Scholarly BG] Error in LOAD_RANKINGS:", error);
-          sendResponse({ success: false, error: error.message });
-        });
-      return true;
-    }
-
     if (message.type === "LOOKUP_ISSN_BY_DOI") {
       const doi: string = message.doi;
       console.log(`[Scholarly BG] CrossRef lookup for DOI: ${doi}`);
@@ -209,7 +23,251 @@ if (chrome && chrome.runtime) {
         });
       return true;
     }
+
+    if (message.type === "FETCH_SCOPUS_RANKING") {
+      const issn: string = message.issn;
+      console.log(`[Scholarly BG] Scopus ranking lookup for ISSN: ${issn}`);
+
+      if (!chrome.storage?.local) {
+        sendResponse({
+          success: false,
+          error: "Chrome storage is unavailable in background context.",
+        });
+        return;
+      }
+
+      // Get API credentials from chrome storage
+      chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
+        const apiKey = items.scopusApiKey || "";
+        const instToken = items.scopusInstToken || "";
+
+        if (!apiKey) {
+          console.error("[Scholarly BG] Scopus API key not configured");
+          sendResponse({
+            success: false,
+            error:
+              "Scopus API key not configured. Please configure it in extension settings.",
+          });
+          return;
+        }
+
+        const digitsOnlyIssn = issn.replace(/-/g, "");
+        const hyphenatedIssn =
+          digitsOnlyIssn.length === 8
+            ? `${digitsOnlyIssn.slice(0, 4)}-${digitsOnlyIssn.slice(4)}`
+            : issn;
+
+        const baseUrl = "https://api.elsevier.com/content/serial/title/issn";
+        const params = new URLSearchParams({
+          apikey: apiKey,
+          view: "ENHANCED",
+        });
+
+        if (instToken) {
+          params.append("insttoken", instToken);
+        }
+
+        const candidates = [hyphenatedIssn, digitsOnlyIssn].filter(Boolean);
+
+        const tryFetch = async () => {
+          for (const candidateIssn of candidates) {
+            const url = `${baseUrl}/${candidateIssn}?${params.toString()}`;
+            console.log(
+              `[Scholarly BG] Scopus request URL ISSN: ${candidateIssn}`,
+            );
+
+            try {
+              const response = await fetch(url, {
+                headers: {
+                  Accept: "application/json",
+                },
+              });
+              const data = await response.json();
+              const entry = data["serial-metadata-response"]?.entry?.[0];
+
+              if (entry) {
+                const ranking = parseScopusEntry(entry);
+                console.log(
+                  `[Scholarly BG] Scopus ranking found for ${candidateIssn}: ${ranking.title}`,
+                );
+                sendResponse({ success: true, ranking });
+                return;
+              }
+
+              const serviceError =
+                data["service-error"]?.status?.statusText ||
+                data["service-error"]?.statusText ||
+                data["service-error"]?.message ||
+                "Unknown Scopus response shape";
+              console.warn(
+                `[Scholarly BG] No Scopus data for ISSN candidate ${candidateIssn}. HTTP ${response.status}. ${serviceError}`,
+              );
+            } catch (err: any) {
+              console.error(
+                `[Scholarly BG] Scopus lookup failed for ${candidateIssn}:`,
+                err?.message || String(err),
+              );
+            }
+          }
+
+          sendResponse({
+            success: false,
+            error: `ISSN not found in Scopus for candidates: ${candidates.join(", ")}`,
+          });
+        };
+
+        tryFetch();
+      });
+
+      return true;
+    }
+
+    if (message.type === "FETCH_SCOPUS_RANKING_BY_DOI") {
+      const doi: string = message.doi;
+      console.log(`[Scholarly BG] Scopus ranking lookup for DOI: ${doi}`);
+
+      if (!chrome.storage?.local) {
+        sendResponse({
+          success: false,
+          error: "Chrome storage is unavailable in background context.",
+        });
+        return;
+      }
+
+      chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
+        const apiKey = items.scopusApiKey || "";
+        const instToken = items.scopusInstToken || "";
+
+        if (!apiKey) {
+          sendResponse({
+            success: false,
+            error:
+              "Scopus API key not configured. Please configure it in extension settings.",
+          });
+          return;
+        }
+
+        const params = new URLSearchParams({
+          apikey: apiKey,
+          view: "STANDARD",
+        });
+        if (instToken) {
+          params.append("insttoken", instToken);
+        }
+
+        const url = `https://api.elsevier.com/content/serial/title/doi/${encodeURIComponent(doi)}?${params.toString()}`;
+        console.log(`[Scholarly BG] Scopus request URL DOI: ${doi}`);
+
+        fetch(url, {
+          headers: {
+            Accept: "application/json",
+          },
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            const entry = data["serial-metadata-response"]?.entry?.[0];
+            if (!entry) {
+              const serviceError =
+                data["service-error"]?.status?.statusText ||
+                data["service-error"]?.statusText ||
+                data["service-error"]?.message ||
+                "DOI not found in Scopus";
+              sendResponse({ success: false, error: serviceError });
+              return;
+            }
+
+            const ranking = parseScopusEntry(entry);
+            ranking.doi = doi;
+            console.log(
+              `[Scholarly BG] Scopus DOI ranking found: ${ranking.title} | ISSN: ${(ranking.issns || []).join(", ")}`,
+            );
+            sendResponse({ success: true, ranking });
+          })
+          .catch((err) => {
+            sendResponse({ success: false, error: err.message || String(err) });
+          });
+      });
+
+      return true;
+    }
   });
 }
 
-export { loadRankings };
+function parseScopusEntry(entry: any): any {
+  const pickLatestMetric = (metric: any) => {
+    if (!metric) return null;
+    const values = Array.isArray(metric) ? metric : [metric];
+    const normalized = values
+      .map((v: any) => ({
+        value: parseFloat(v?.["$"] ?? ""),
+        year: parseInt(v?.["@year"] ?? "0", 10),
+      }))
+      .filter((v: any) => !isNaN(v.value) && !isNaN(v.year) && v.year > 0)
+      .sort((a: any, b: any) => b.year - a.year);
+    return normalized[0] || null;
+  };
+
+  const issns = [entry["prism:issn"], entry["prism:eIssn"]]
+    .filter(Boolean)
+    .map((i: string) => i.trim());
+
+  const ranking: any = {
+    title: entry["dc:title"] || "Unknown",
+    issn: issns[0] || "",
+    issns,
+    publisher: entry["dc:publisher"] || "",
+    coverageStartYear: entry["coverageStartYear"] || "",
+    coverageEndYear: entry["coverageEndYear"] || "",
+    aggregationType: entry["prism:aggregationType"] || "",
+    openAccess: entry["openaccess"] || "0",
+  };
+
+  // Extract current SJR
+  if (entry.SJRList?.SJR) {
+    const latestSjr = pickLatestMetric(entry.SJRList.SJR);
+    if (latestSjr) {
+      ranking.sjr = latestSjr.value;
+      ranking.sjrYear = latestSjr.year;
+    }
+  }
+
+  // Extract current SNIP
+  if (entry.SNIPList?.SNIP) {
+    const latestSnip = pickLatestMetric(entry.SNIPList.SNIP);
+    if (latestSnip) {
+      ranking.snip = latestSnip.value;
+      ranking.snipYear = latestSnip.year;
+    }
+  }
+
+  // Extract CiteScore metrics
+  if (entry.citeScoreYearInfoList) {
+    ranking.citeScore = parseFloat(
+      entry.citeScoreYearInfoList.citeScoreCurrentMetric || 0,
+    );
+    ranking.citeScoreYear =
+      entry.citeScoreYearInfoList.citeScoreCurrentMetricYear;
+    ranking.citeScoreTracker = parseFloat(
+      entry.citeScoreYearInfoList.citeScoreTracker || 0,
+    );
+    ranking.citeScoreTrackerYear =
+      entry.citeScoreYearInfoList.citeScoreTrackerYear;
+  }
+
+  // Extract subject areas
+  if (entry["subject-area"]) {
+    const areas = Array.isArray(entry["subject-area"])
+      ? entry["subject-area"]
+      : [entry["subject-area"]];
+    ranking.subjectAreas = areas.map((area: any) => ({
+      code: area["@code"],
+      abbrev: area["@abbrev"],
+      name: area["$"],
+    }));
+  }
+
+  ranking.source = "scopus";
+  return ranking;
+}
+
+export {};

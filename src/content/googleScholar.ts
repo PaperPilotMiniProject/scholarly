@@ -1,13 +1,7 @@
 /// <reference types="chrome" />
 
 import { getGoogleScholarEnabled } from "../../src/utils/storage";
-import {
-  loadSJRData,
-  findRanking,
-  findRankingByIssn,
-  getIssnsByDoi,
-  JournalRanking,
-} from "../../src/utils/csvParser";
+import { getScopusRankingByDoi } from "../../src/utils/csvParser";
 
 interface Article {
   title: string;
@@ -15,7 +9,8 @@ interface Article {
   journal?: string;
   year?: string;
   citations?: number;
-  ranking?: JournalRanking;
+  ranking?: any;
+  scopusRanking?: any;
   // allow multiple data sources to be augmented later
   extra?: Record<string, unknown>;
 }
@@ -46,14 +41,6 @@ async function scrapeArticles(): Promise<void> {
   console.log("[Scholarly] Starting Google Scholar scrape...");
 
   try {
-    const rankings = await loadSJRData();
-    console.log(`[Scholarly] Rankings loaded: ${rankings.length}`);
-    if (rankings.length === 0) {
-      console.warn(
-        "[Scholarly] No rankings data loaded - CSV may not be accessible",
-      );
-    }
-
     // ── Phase 1: collect DOM data synchronously ──────────────────────────────
     type ArticleData = {
       titleEl: HTMLElement;
@@ -125,54 +112,38 @@ async function scrapeArticles(): Promise<void> {
       }
     });
 
-    // ── Phase 2: parallel CrossRef ISSN lookups ───────────────────────────────
-    const issnResults = await Promise.all(
+    // ── Phase 2: log extracted title -> DOI mapping ───────────────────────────
+    articles.forEach((a, i) => {
+      console.log(
+        `[Scholarly] Title -> DOI [${i}]: "${a.title}" -> ${a.doi || "No DOI found"}`,
+      );
+    });
+
+    // ── Phase 3: fetch Scopus rankings via DOI only ────────────────────────────
+    console.log(
+      "[Scholarly] Fetching Scopus rankings by DOI for all articles...",
+    );
+    const scopusResults = await Promise.all(
       articles.map((a) =>
-        a.doi ? getIssnsByDoi(a.doi) : Promise.resolve(null),
+        a.doi ? getScopusRankingByDoi(a.doi) : Promise.resolve(null),
       ),
     );
 
-    // ── Phase 3: match rankings and inject badges ─────────────────────────────
+    // ── Phase 4: match rankings and inject badges ─────────────────────────────
     const collected: Article[] = [];
 
     articles.forEach((a, i) => {
-      const issns = issnResults[i];
-      let ranking: JournalRanking | null = null;
+      const scopusRanking = scopusResults[i];
+      let ranking: any = null;
 
-      // Try ISSN-based match first (exact, no false positives)
-      if (issns && issns.length > 0 && rankings.length > 0) {
-        ranking = findRankingByIssn(issns, rankings);
-        if (ranking) {
-          console.log(
-            `[Scholarly] ✓ ISSN match [${i}]: "${a.title.substring(0, 50)}" → ${ranking.title}`,
-          );
-        }
-      }
-
-      // Fall back to title-based match when no DOI / CrossRef returned nothing
-      // But SKIP if journal name looks truncated or suspiciously short
-      const isJournalNameReliable =
-        a.journal.length > 5 && !a.journal.endsWith("...");
-      if (
-        !ranking &&
-        a.journal &&
-        rankings.length > 0 &&
-        isJournalNameReliable
-      ) {
+      if (scopusRanking) {
+        ranking = scopusRanking;
         console.log(
-          `[Scholarly] Attempting fuzzy match for journal: "${a.journal}"`,
+          `[Scholarly] ✓ Scopus ranking [${i}]: "${a.title.substring(0, 50)}" → ${ranking.title} | ISSN: ${(ranking.issns || []).join(", ") || "N/A"} | SJR: ${ranking.sjr ?? "N/A"} (${ranking.sjrYear ?? "N/A"}) | SNIP: ${ranking.snip ?? "N/A"} (${ranking.snipYear ?? "N/A"})`,
         );
-        ranking = findRanking(a.journal, rankings);
-        if (ranking) {
-          console.log(
-            `[Scholarly] ✓ Title match [${i}]: "${a.title.substring(0, 50)}" | "${a.journal}" → ${ranking.title} (ISSN: ${ranking.issns?.join(", ") || "none"})`,
-          );
-        } else {
-          console.log(`[Scholarly] ✗ No match [${i}]: journal="${a.journal}"`);
-        }
-      } else if (!ranking && a.journal) {
+      } else {
         console.log(
-          `[Scholarly] ⚠ Skipped fuzzy match [${i}]: journal name too short/incomplete: "${a.journal}"`,
+          `[Scholarly] ✗ No Scopus ranking [${i}]: "${a.title.substring(0, 50)}"`,
         );
       }
 
@@ -182,23 +153,45 @@ async function scrapeArticles(): Promise<void> {
         journal: a.journal,
         year: a.year,
         citations: a.citations,
-        ranking: ranking ?? undefined,
+        ranking: scopusRanking ?? undefined,
+        scopusRanking: scopusRanking ?? undefined,
         extra: {},
       };
 
-      if (ranking) {
+      if (scopusRanking) {
         const badge = document.createElement("span");
         badge.className = "scholarly-badge";
         badge.style.cssText =
-          "margin-left:8px;padding:2px 4px;background:#ffeb3b;color:#000;font-size:10px;border-radius:3px;";
-        badge.textContent = `SJR ${ranking.sjr} (Q${ranking.quartile})`;
+          "margin-left:8px;padding:2px 6px;background:#1976d2;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
+        badge.textContent = `SJR ${Number(scopusRanking.sjr || 0).toFixed(3)} (${scopusRanking.sjrYear || "-"})`;
+
         a.titleEl.appendChild(badge);
 
+        if (typeof scopusRanking.snip === "number") {
+          const snipBadge = document.createElement("span");
+          snipBadge.className = "scholarly-badge";
+          snipBadge.style.cssText =
+            "margin-left:4px;padding:2px 6px;background:#8e24aa;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
+          snipBadge.textContent = `SNIP ${scopusRanking.snip.toFixed(3)} (${scopusRanking.snipYear || "-"})`;
+          a.titleEl.appendChild(snipBadge);
+        }
+
+        // Add CiteScore badge if available
+        if (scopusRanking.citeScore) {
+          const citeScoreBadge = document.createElement("span");
+          citeScoreBadge.className = "scholarly-badge";
+          citeScoreBadge.style.cssText =
+            "margin-left:4px;padding:2px 6px;background:#4caf50;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
+          citeScoreBadge.textContent = `CiteScore ${scopusRanking.citeScore.toFixed(2)} (${scopusRanking.citeScoreYear})`;
+          a.titleEl.appendChild(citeScoreBadge);
+        }
+
+        // Add citations count
         if (a.citations) {
           const citeBadge = document.createElement("span");
           citeBadge.className = "scholarly-badge";
           citeBadge.style.cssText =
-            "margin-left:4px;padding:2px 4px;background:#c8e6c9;color:#000;font-size:10px;border-radius:3px;";
+            "margin-left:4px;padding:2px 6px;background:#ff9800;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
           citeBadge.textContent = `Cited by ${a.citations}`;
           a.titleEl.appendChild(citeBadge);
         }
@@ -207,9 +200,9 @@ async function scrapeArticles(): Promise<void> {
       collected.push(article);
     });
 
-    const withRanking = collected.filter((a) => a.ranking).length;
+    const withScopus = collected.filter((a) => a.scopusRanking).length;
     console.log(
-      `[Scholarly] Done: ${collected.length} articles, ${withRanking} with rankings, ${collected.length - withRanking} without`,
+      `[Scholarly] Done: ${collected.length} articles, ${withScopus} with Scopus rankings`,
     );
     console.log("[Scholarly] Full data:", collected);
   } catch (error) {
