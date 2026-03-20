@@ -38,8 +38,8 @@ if (chrome && chrome.runtime) {
 
       // Get API credentials from chrome storage
       chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
-        const apiKey = items.scopusApiKey || "";
-        const instToken = items.scopusInstToken || "";
+        const apiKey = (items.scopusApiKey || "") as string;
+        const instToken = (items.scopusInstToken || "") as string;
 
         if (!apiKey) {
           console.error("[Scholarly BG] Scopus API key not configured");
@@ -135,8 +135,8 @@ if (chrome && chrome.runtime) {
       }
 
       chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
-        const apiKey = items.scopusApiKey || "";
-        const instToken = items.scopusInstToken || "";
+        const apiKey = (items.scopusApiKey || "") as string;
+        const instToken = (items.scopusInstToken || "") as string;
 
         if (!apiKey) {
           sendResponse({
