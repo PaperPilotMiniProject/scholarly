@@ -11,8 +11,11 @@ type ProfileArticleData = {
   badgeContainer: HTMLElement;
 };
 
-function clearProfileBadges(): void {
+export function clearProfileBadges(): void {
   document.querySelectorAll(".scholarly-badge").forEach((el) => el.remove());
+  document
+    .querySelectorAll(".scholarly-badge-anchor")
+    .forEach((el) => el.remove());
 }
 
 function extractDoi(link: string): string | null {
@@ -207,11 +210,22 @@ export function isGoogleScholarProfilePage(): boolean {
   );
 }
 
-export async function scrapeGoogleScholarProfile(): Promise<void> {
+export async function scrapeGoogleScholarProfile(options?: {
+  shouldContinue?: () => boolean;
+}): Promise<void> {
+  const shouldContinue = options?.shouldContinue ?? (() => true);
+
+  if (!shouldContinue()) {
+    return;
+  }
+
   clearProfileBadges();
   console.log("[Scholarly][Profile] Starting profile scrape...");
 
   const rows = await waitForProfileRows();
+  if (!shouldContinue()) {
+    return;
+  }
   console.log(`[Scholarly][Profile] Found ${rows.length} profile rows`);
 
   const articles: ProfileArticleData[] = [];
@@ -225,6 +239,16 @@ export async function scrapeGoogleScholarProfile(): Promise<void> {
         "a",
       ) as HTMLAnchorElement | null;
       if (!titleLink) return;
+
+      let badgeAnchor = titleCell.querySelector(
+        ".scholarly-badge-anchor",
+      ) as HTMLElement | null;
+      if (!badgeAnchor) {
+        badgeAnchor = document.createElement("span");
+        badgeAnchor.className = "scholarly-badge-anchor";
+        badgeAnchor.style.cssText = "display:inline-flex;flex-wrap:wrap;";
+        titleLink.insertAdjacentElement("afterend", badgeAnchor);
+      }
 
       const title = titleLink.innerText.trim();
       if (!title) return;
@@ -271,7 +295,7 @@ export async function scrapeGoogleScholarProfile(): Promise<void> {
         link,
         doi,
         citations,
-        badgeContainer: titleLink,
+        badgeContainer: badgeAnchor,
       });
 
       console.log(
@@ -290,6 +314,10 @@ export async function scrapeGoogleScholarProfile(): Promise<void> {
   // Profile links are usually Scholar internal links. Resolve DOI by fetching
   // each citation page and extracting DOI from the page HTML when needed.
   await runWithConcurrency(articles, 4, async (article, index) => {
+    if (!shouldContinue()) {
+      return;
+    }
+
     if (article.doi) {
       return;
     }
@@ -308,7 +336,15 @@ export async function scrapeGoogleScholarProfile(): Promise<void> {
     ),
   );
 
+  if (!shouldContinue()) {
+    return;
+  }
+
   articles.forEach((article, index) => {
+    if (!shouldContinue()) {
+      return;
+    }
+
     const scopusRanking = scopusResults[index];
     if (!scopusRanking) {
       return;

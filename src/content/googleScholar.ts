@@ -3,6 +3,7 @@
 import { getGoogleScholarEnabled } from "../../src/utils/storage";
 import { getScopusRankingByDoi } from "../../src/utils/csvParser";
 import {
+  clearProfileBadges,
   isGoogleScholarProfilePage,
   scrapeGoogleScholarProfile,
 } from "./googlescholarprofile";
@@ -51,7 +52,10 @@ function isUserProfilePage(): boolean {
 /**
  * Collects all visible article results from a Google Scholar search page with journal rankings.
  */
-async function scrapeArticles(): Promise<void> {
+async function scrapeArticles(
+  shouldContinue: () => boolean = () => true,
+): Promise<void> {
+  if (!shouldContinue()) return;
   clearBadges();
   console.log("[Scholarly] Starting Google Scholar scrape...");
 
@@ -241,6 +245,8 @@ async function scrapeArticles(): Promise<void> {
       ),
     );
 
+    if (!shouldContinue()) return;
+
     // ── Phase 4: match rankings and inject badges ─────────────────────────────
     const collected: Article[] = [];
 
@@ -270,7 +276,7 @@ async function scrapeArticles(): Promise<void> {
         extra: {},
       };
 
-      if (scopusRanking) {
+      if (scopusRanking && shouldContinue()) {
         const badge = document.createElement("span");
         badge.className = "scholarly-badge";
         badge.style.cssText =
@@ -338,19 +344,29 @@ function init(): void {
 
   console.log("[Scholarly] On Google Scholar domain, setting up listeners...");
 
+  let runGeneration = 0;
+  const nextGeneration = (): number => {
+    runGeneration += 1;
+    return runGeneration;
+  };
+
   // helper to decide whether to scrape now
   const maybeScrape = async (enabled: boolean): Promise<void> => {
     console.log(`[Scholarly] maybeScrape called with enabled=${enabled}`);
     if (enabled) {
+      const currentGeneration = nextGeneration();
+      const shouldContinue = () => currentGeneration === runGeneration;
       console.log("[Scholarly] Scraping is enabled, starting scrape...");
       if (isGoogleScholarProfilePage()) {
-        await scrapeGoogleScholarProfile();
+        await scrapeGoogleScholarProfile({ shouldContinue });
       } else {
-        await scrapeArticles();
+        await scrapeArticles(shouldContinue);
       }
     } else {
+      nextGeneration();
       console.log("[Scholarly] Scraping is disabled, clearing badges...");
       clearBadges();
+      clearProfileBadges();
     }
   };
 
@@ -362,6 +378,10 @@ function init(): void {
     })
     .catch((error) => {
       console.error("[Scholarly] Error checking storage:", error);
+      // Fail-safe: default to enabled for first-time/edge environments.
+      maybeScrape(true).catch((scrapeError) => {
+        console.error("[Scholarly] Error during fallback scrape:", scrapeError);
+      });
     });
 
   // Listen for messages from the popup when toggle changes

@@ -11,7 +11,7 @@ import {
 import "./App.css";
 
 function App() {
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [scopusApiKey, setScopusApiKey] = useState("");
