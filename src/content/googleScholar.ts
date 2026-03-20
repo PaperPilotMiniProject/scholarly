@@ -2,6 +2,10 @@
 
 import { getGoogleScholarEnabled } from "../../src/utils/storage";
 import { getScopusRankingByDoi } from "../../src/utils/csvParser";
+import {
+  isGoogleScholarProfilePage,
+  scrapeGoogleScholarProfile,
+} from "./googlescholarprofile";
 
 interface Article {
   title: string;
@@ -34,6 +38,17 @@ function extractDoi(link: string): string | null {
 }
 
 /**
+ * Detects if we're on a user profile page or search results page.
+ */
+function isUserProfilePage(): boolean {
+  // User profile pages have URLs like: /citations?user=ZpBeJ_IAAAAJ&hl=en
+  return (
+    /\/citations/.test(window.location.pathname) &&
+    /user=/.test(window.location.search)
+  );
+}
+
+/**
  * Collects all visible article results from a Google Scholar search page with journal rankings.
  */
 async function scrapeArticles(): Promise<void> {
@@ -44,6 +59,7 @@ async function scrapeArticles(): Promise<void> {
     // ── Phase 1: collect DOM data synchronously ──────────────────────────────
     type ArticleData = {
       titleEl: HTMLElement;
+      badgeContainer: HTMLElement;
       title: string;
       link: string;
       doi: string | null;
@@ -52,19 +68,75 @@ async function scrapeArticles(): Promise<void> {
       citations: number;
     };
 
-    const results = document.querySelectorAll(".gs_r");
-    console.log(`[Scholarly] Found ${results.length} result containers`);
+    // Determine selector based on page type
+    const isProfile = isUserProfilePage();
+    const selector = isProfile ? ".gsc_a_tr" : ".gs_r";
+
+    const results = document.querySelectorAll(selector);
+    console.log(
+      `[Scholarly] Found ${results.length} result containers (Page type: ${isProfile ? "Profile" : "Search"})`,
+    );
     const articles: ArticleData[] = [];
 
     results.forEach((row, index) => {
       try {
-        const titleEl = row.querySelector(".gs_rt") as HTMLElement | null;
-        if (!titleEl) return;
+        let titleEl: HTMLElement | null = null;
+        let badgeContainer: HTMLElement | null = null;
+        let title = "";
+        let linkEl: HTMLAnchorElement | null = null;
+        let sourceEl: HTMLElement | null = null;
+        let citationsCell: HTMLTableCellElement | null = null;
 
-        const title = titleEl.innerText.trim();
-        if (!title) return;
+        if (isProfile) {
+          // User profile page: table row structure (.gsc_a_tr)
+          // Title and citation source are in the first cell with class gsc_a_t
+          titleEl = row.querySelector(".gsc_a_t") as HTMLElement | null;
+          if (!titleEl) return;
 
-        const linkEl = titleEl.querySelector("a") as HTMLAnchorElement | null;
+          // Extract title from the link
+          const titleLink = titleEl.querySelector("a");
+          if (!titleLink) return;
+
+          title = titleLink.innerText.trim();
+          if (!title) return;
+
+          linkEl = titleLink as HTMLAnchorElement;
+
+          badgeContainer = titleLink; // Append badges to the title link
+
+          // Citation count is in the cell with class gsc_a_c
+          citationsCell = row.querySelector(
+            ".gsc_a_c",
+          ) as HTMLTableCellElement | null;
+
+          // Year is in the cell with class gsc_a_y
+          const yearCell = row.querySelector(".gsc_a_y") as HTMLElement | null;
+          if (yearCell) {
+            const yearMatch = yearCell.innerText.match(/\b(19|20)\d{2}\b/);
+            if (yearMatch) {
+              // Year will be set later
+            }
+          }
+        } else {
+          // Search results page: .gs_r structure
+          titleEl = row.querySelector(".gs_rt") as HTMLElement | null;
+          if (!titleEl) return;
+
+          title = titleEl.innerText.trim();
+          if (!title) return;
+
+          linkEl = titleEl.querySelector("a") as HTMLAnchorElement | null;
+          badgeContainer = titleEl; // Append badges to title element
+          sourceEl = row.querySelector(".gs_a") as HTMLElement | null;
+
+          row.querySelectorAll(".gs_fl a").forEach((a) => {
+            const t = a.textContent || "";
+            if (t.startsWith("Cited by")) {
+              // Will process later
+            }
+          });
+        }
+
         const link = linkEl ? linkEl.href : "";
         const doi = extractDoi(link);
 
@@ -72,8 +144,39 @@ async function scrapeArticles(): Promise<void> {
         let year = "";
         let citations = 0;
 
-        const sourceEl = row.querySelector(".gs_a") as HTMLElement | null;
-        if (sourceEl) {
+        if (isProfile) {
+          // For profile pages, extract year from the year cell
+          const yearCell = row.querySelector(".gsc_a_y") as HTMLElement | null;
+          if (yearCell) {
+            const yearMatch = yearCell.innerText.match(/\b(19|20)\d{2}\b/);
+            if (yearMatch) year = yearMatch[0];
+          }
+
+          // Extract citations from the citation cell
+          if (citationsCell) {
+            const citText = citationsCell.innerText.trim();
+            if (citText) {
+              const citMatch = citText.match(/\d+/);
+              if (citMatch) citations = parseInt(citMatch[0], 10);
+            }
+          }
+
+          // Extract journal/source info from the gray text under title
+          const grayTexts = titleEl.querySelectorAll(".gs_gray");
+          if (grayTexts.length > 0) {
+            const sourceText = (grayTexts[grayTexts.length - 1] as HTMLElement)
+              .innerText; // Usually the last gray text line
+            console.log(`[Scholarly] Source text [${index}]: "${sourceText}"`);
+
+            let parts = sourceText.split(" - ");
+            if (parts.length >= 2) {
+              journal = parts[0].trim();
+              const yearMatch = sourceText.match(/\b(19|20)\d{2}\b/);
+              if (yearMatch && !year) year = yearMatch[0];
+            }
+          }
+        } else if (sourceEl) {
+          // Search results page processing
           const sourceText = sourceEl.innerText;
           console.log(`[Scholarly] Source text [${index}]: "${sourceText}"`);
 
@@ -106,7 +209,16 @@ async function scrapeArticles(): Promise<void> {
           }
         }
 
-        articles.push({ titleEl, title, link, doi, journal, year, citations });
+        articles.push({
+          titleEl,
+          badgeContainer: badgeContainer!,
+          title,
+          link,
+          doi,
+          journal,
+          year,
+          citations,
+        });
       } catch (error) {
         console.error(`[Scholarly] Error parsing result ${index}:`, error);
       }
@@ -165,7 +277,7 @@ async function scrapeArticles(): Promise<void> {
           "margin-left:8px;padding:2px 6px;background:#1976d2;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
         badge.textContent = `SJR ${Number(scopusRanking.sjr || 0).toFixed(3)} (${scopusRanking.sjrYear || "-"})`;
 
-        a.titleEl.appendChild(badge);
+        a.badgeContainer.appendChild(badge);
 
         if (typeof scopusRanking.snip === "number") {
           const snipBadge = document.createElement("span");
@@ -173,7 +285,7 @@ async function scrapeArticles(): Promise<void> {
           snipBadge.style.cssText =
             "margin-left:4px;padding:2px 6px;background:#8e24aa;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
           snipBadge.textContent = `SNIP ${scopusRanking.snip.toFixed(3)} (${scopusRanking.snipYear || "-"})`;
-          a.titleEl.appendChild(snipBadge);
+          a.badgeContainer.appendChild(snipBadge);
         }
 
         // Add CiteScore badge if available
@@ -183,7 +295,7 @@ async function scrapeArticles(): Promise<void> {
           citeScoreBadge.style.cssText =
             "margin-left:4px;padding:2px 6px;background:#4caf50;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
           citeScoreBadge.textContent = `CiteScore ${scopusRanking.citeScore.toFixed(2)} (${scopusRanking.citeScoreYear})`;
-          a.titleEl.appendChild(citeScoreBadge);
+          a.badgeContainer.appendChild(citeScoreBadge);
         }
 
         // Add citations count
@@ -193,7 +305,7 @@ async function scrapeArticles(): Promise<void> {
           citeBadge.style.cssText =
             "margin-left:4px;padding:2px 6px;background:#ff9800;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
           citeBadge.textContent = `Cited by ${a.citations}`;
-          a.titleEl.appendChild(citeBadge);
+          a.badgeContainer.appendChild(citeBadge);
         }
       }
 
@@ -231,7 +343,11 @@ function init(): void {
     console.log(`[Scholarly] maybeScrape called with enabled=${enabled}`);
     if (enabled) {
       console.log("[Scholarly] Scraping is enabled, starting scrape...");
-      await scrapeArticles();
+      if (isGoogleScholarProfilePage()) {
+        await scrapeGoogleScholarProfile();
+      } else {
+        await scrapeArticles();
+      }
     } else {
       console.log("[Scholarly] Scraping is disabled, clearing badges...");
       clearBadges();
