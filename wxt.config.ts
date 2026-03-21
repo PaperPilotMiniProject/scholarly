@@ -10,6 +10,7 @@ export default defineConfig({
       "*://*.google.com/*",
       "*://api.crossref.org/*",
       "*://api.elsevier.com/*",
+      "*://*.scopus.com/*",
     ],
   },
   vite: () => ({

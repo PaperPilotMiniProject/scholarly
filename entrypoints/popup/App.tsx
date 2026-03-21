@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import {
   getGoogleScholarEnabled,
+  getScopusEnabled,
   setGoogleScholarEnabled,
+  setScopusEnabled,
 } from "../../src/utils/storage";
 import {
   getConfig,
@@ -12,6 +14,7 @@ import "./App.css";
 
 function App() {
   const [enabled, setEnabled] = useState(true);
+  const [scopusEnabled, setScopusEnabledState] = useState(true);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [scopusApiKey, setScopusApiKey] = useState("");
@@ -25,15 +28,19 @@ function App() {
 
   useEffect(() => {
     // read initial values from storage when popup opens
-    Promise.all([getGoogleScholarEnabled(), getConfig()]).then(
-      ([scholarEnabled, config]: any) => {
+    Promise.all([getGoogleScholarEnabled(), getScopusEnabled(), getConfig()])
+      .then(([scholarEnabled, scopusEnabledVal, config]: any) => {
         setEnabled(scholarEnabled);
+        setScopusEnabledState(scopusEnabledVal);
         setScopusApiKey(config.scopusApiKey || "");
         setScopusInstToken(config.scopusInstToken || "");
         setUseScopusApi(config.useScopusApi !== false);
         setLoading(false);
-      },
-    );
+      })
+      .catch((err) => {
+        console.error("[Scholarly Popup] Failed to load settings", err);
+        setLoading(false);
+      });
   }, []);
 
   const toggle = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -54,6 +61,29 @@ function App() {
               .catch((error) => {
                 // Tab might not have content script loaded, that's ok
                 console.log("Could not send message to tab:", error);
+              });
+          }
+        });
+      });
+    }
+  };
+
+  const toggleScopus = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVal = e.target.checked;
+    setScopusEnabledState(newVal);
+    setScopusEnabled(newVal);
+
+    if (chrome && chrome.tabs) {
+      chrome.tabs.query({ url: "*://*.scopus.com/*" }, (tabs) => {
+        tabs.forEach((tab) => {
+          if (tab.id) {
+            chrome.tabs
+              .sendMessage(tab.id, {
+                type: "TOGGLE_SCOPUS_CHANGED",
+                enabled: newVal,
+              })
+              .catch((error) => {
+                console.log("Could not send message to scopus tab:", error);
               });
           }
         });
@@ -114,6 +144,18 @@ function App() {
               <input type="checkbox" checked={enabled} onChange={toggle} />
               <span className="slider" />
               <span className="label-text">Enable Google Scholar</span>
+            </label>
+          </div>
+
+          <div className="settings-section">
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={scopusEnabled}
+                onChange={toggleScopus}
+              />
+              <span className="slider" />
+              <span className="label-text">Enable Scopus</span>
             </label>
           </div>
 

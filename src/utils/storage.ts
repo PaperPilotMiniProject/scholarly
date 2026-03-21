@@ -22,6 +22,50 @@ export function setGoogleScholarEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
+ * Persist the enabled state of the Scopus scraper.
+ */
+export function setScopusEnabled(enabled: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    if (chrome && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ scopusEnabled: enabled }, () => {
+        resolve();
+      });
+    } else {
+      try {
+        localStorage.setItem("scopusEnabled", JSON.stringify(enabled));
+      } catch (e) {}
+      resolve();
+    }
+  });
+}
+
+/**
+ * Retrieve the saved state of the Scopus scraper.
+ */
+export function getScopusEnabled(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (chrome && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(["scopusEnabled"], (result) => {
+        const enabled = result.scopusEnabled;
+        resolve(enabled === undefined ? true : Boolean(enabled));
+      });
+    } else {
+      try {
+        const stored = localStorage.getItem("scopusEnabled");
+        if (stored === null) {
+          resolve(true);
+          return;
+        }
+        const val = JSON.parse(stored);
+        resolve(Boolean(val));
+      } catch (e) {
+        resolve(true);
+      }
+    }
+  });
+}
+
+/**
  * Retrieve the saved state of the Google Scholar scraper.
  * @returns {Promise<boolean>}
  */
