@@ -228,6 +228,7 @@ async function scrapeArticles(
       }
     });
 
+
     // ── Phase 2: log extracted title -> DOI mapping ───────────────────────────
     articles.forEach((a, i) => {
       console.log(
@@ -253,7 +254,7 @@ async function scrapeArticles(
     articles.forEach((a, i) => {
       const scopusRanking = scopusResults[i];
       let ranking: any = null;
-
+      console.log(`[Scholarly] Ranking [${i}]: "${a.title.substring(0, 50)}" → ${scopusRanking}`);
       if (scopusRanking) {
         ranking = scopusRanking;
         console.log(

@@ -11,6 +11,8 @@ export default defineConfig({
       "*://api.crossref.org/*",
       "*://api.elsevier.com/*",
       "*://*.scopus.com/*",
+      "https://orcid.org/*",
+      "https://pub.orcid.org/*",
     ],
   },
   vite: () => ({
