@@ -19,11 +19,18 @@ function clearBadges() {
 
 function badgeStyle(color) {
 	return `
-		padding: 2px 6px;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 12px;
 		background: ${color};
 		color: #fff;
-		border-radius: 4px;
-		font-weight: bold;
+		border-radius: 999px;
+		font-weight: 700;
+		font-size: 13px;
+		box-shadow: 0 2px 4px rgba(0,0,0,0.12);
+		line-height: 1.2;
+		letter-spacing: 0.1px;
 	`;
 }
 
@@ -73,30 +80,50 @@ async function getDoiFromTitle(title) {
     return null;
   }
 }
+// Collect article cards across both Scopus search pages and author profile pages.
 function collectArticles() {
-  const containers = Array.from(
-    document.querySelectorAll("tr[class*='TableItems-module']")
-  );
+	const articles = [];
+	const seenTitles = new Set();
 
-  const articles = [];
+	const sources = [
+		// Standard search/table listing
+		{ containerSelector: "tr[class*='TableItems-module']", titleSelector: "h3 a span span" },
+		// Author profile: document list items often expose the title element directly
+		{ containerSelector: "[data-testid='document-title'], a[data-testid='document-title']" },
+		// Author profile (results list items)
+		{ containerSelector: "[data-testid='results-list-item']", titleSelector: "span[class*='Typography-module']" },
+		// Generic fallbacks used across some Scopus views
+		{ containerSelector: "[data-test='result-title']" },
+		{ containerSelector: "a[href*='/record/display.uri']" },
+	];
 
-  containers.forEach((container) => {
-    const titleEl = container.querySelector("h3 a span span");
+	const findContainer = (el) =>
+		el.closest(
+			"tr[class*='TableItems-module'], li, article, .result-item, .listRow, .SearchItem-module, .DocumentItem-module, .ddmDocTitle"
+		) || el;
 
-    if (!titleEl) return;
+	sources.forEach(({ containerSelector, titleSelector }) => {
+		document.querySelectorAll(containerSelector).forEach((node) => {
+			const titleEl = titleSelector ? node.querySelector(titleSelector) : node;
+			if (!titleEl) return;
 
-    const title = titleEl.textContent.trim();
+			const title = titleEl.textContent?.trim();
+			if (!title || seenTitles.has(title)) return;
+			seenTitles.add(title);
 
-    articles.push({
-      title,
-      container,
-      titleEl: titleEl.closest("h3"), // 🔥 important
-    });
-  });
+			const container = findContainer(titleEl);
 
-  console.log("Articles found:", articles.length);
+			articles.push({
+				title,
+				container,
+				titleEl: titleEl.closest("h3") || titleEl,
+			});
+		});
+	});
 
-  return articles;
+	console.log("Articles found:", articles.length);
+
+	return articles;
 }
 async function annotateArticle(article, scopusRanking) {
 	if (!scopusRanking || !article.titleEl) return;
@@ -107,24 +134,24 @@ async function annotateArticle(article, scopusRanking) {
 	const container = document.createElement("div");
 	container.className = "scholarly-badge-container";
 	container.style.cssText = `
-		margin-top: 4px;
-		font-size: 12px;
+		margin-top: 8px;
 		display: flex;
-		gap: 6px;
+		gap: 8px;
 		flex-wrap: wrap;
+		align-items: center;
 	`;
 
 	const sjr = document.createElement("span");
-	sjr.textContent = `SJR ${scopusRanking.sjr ?? "-"}`;
-	sjr.style.cssText = badgeStyle("#1976d2");
+	sjr.textContent = `${scopusRanking.sjr ?? "-"} SJR`;
+	sjr.style.cssText = badgeStyle("#3b5fde");
 
 	const snip = document.createElement("span");
-	snip.textContent = `SNIP ${scopusRanking.snip ?? "-"}`;
-	snip.style.cssText = badgeStyle("#8e24aa");
+	snip.textContent = `${scopusRanking.snip ?? "-"} SNIP`;
+	snip.style.cssText = badgeStyle("#e8751a");
 
 	const cite = document.createElement("span");
-	cite.textContent = `Cite ${scopusRanking.citeScore ?? "-"}`;
-	cite.style.cssText = badgeStyle("#4caf50");
+	cite.textContent = `${scopusRanking.citeScore ?? "-"} CiteScore`;
+	cite.style.cssText = badgeStyle("#0f9d58");
 
 	container.append(sjr, snip, cite);
 
@@ -136,7 +163,6 @@ async function annotateArticle(article, scopusRanking) {
 async function scrapeScopus(shouldContinue) {
 	if (!shouldContinue()) return;
 
-	clearBadges();
 	console.log("[Scholarly][Scopus] Starting scrape...");
 
 	const articles = collectArticles();
@@ -155,7 +181,11 @@ console.log(`[Scholarly][Scopus] Found ${articles.length} articles`);
 		// Be polite to remote APIs; space requests.
 		await delay(1000);
 
-		const doi = await getDoiFromTitle(article.title);
+		// Prefer an in-page DOI if available; fall back to CrossRef lookup by title
+		let doi = findDoiInContainer(article.container);
+		if (!doi) {
+			doi = await getDoiFromTitle(article.title);
+		}
 
 		if (!doi) {
 			console.warn(`[Scholarly][Scopus] ✗ No DOI found for title: ${article.title}`);
