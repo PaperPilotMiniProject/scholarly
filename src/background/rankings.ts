@@ -1,5 +1,15 @@
 /// <reference types="chrome" />
 
+type LocalSjrData = {
+  rank: string;
+  hIndex: string;
+  sjrBestQuartile: string;
+  title: string;
+};
+
+let localSjrMap: Map<string, LocalSjrData> | null = null;
+let isLoadingLocalSjr = false;
+
 if (chrome && chrome.runtime) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "LOOKUP_ISSN_BY_DOI") {
@@ -86,7 +96,8 @@ if (chrome && chrome.runtime) {
               const entry = data["serial-metadata-response"]?.entry?.[0];
 
               if (entry) {
-                const ranking = parseScopusEntry(entry);
+                let ranking = parseScopusEntry(entry);
+                ranking = await augmentWithLocalSjr(ranking);
                 console.log(
                   `[Scholarly BG] Scopus ranking found for ${candidateIssn}: ${ranking.title}`,
                 );
@@ -178,10 +189,12 @@ if (chrome && chrome.runtime) {
 
             const ranking = parseScopusEntry(entry);
             ranking.doi = doi;
-            console.log(
-              `[Scholarly BG] Scopus DOI ranking found: ${ranking.title} | ISSN: ${(ranking.issns || []).join(", ")}`,
-            );
-            sendResponse({ success: true, ranking });
+            augmentWithLocalSjr(ranking).then((augmentedRanking) => {
+              console.log(
+                `[Scholarly BG] Scopus DOI ranking found: ${augmentedRanking.title} | ISSN: ${(augmentedRanking.issns || []).join(", ")}`,
+              );
+              sendResponse({ success: true, ranking: augmentedRanking });
+            });
           })
           .catch((err) => {
             sendResponse({ success: false, error: err.message || String(err) });
@@ -267,6 +280,94 @@ function parseScopusEntry(entry: any): any {
   }
 
   ranking.source = "scopus";
+  return ranking;
+}
+
+/**
+ * Normalizes an ISSN by removing hyphens and spaces.
+ */
+function normalizeIssn(issn: string): string {
+  return issn.replace(/[-\s]/g, "").toUpperCase();
+}
+
+/**
+ * Loads and indexes scimagojr_2024.json into a Map for fast lookup.
+ */
+async function loadLocalSjrData(): Promise<Map<string, LocalSjrData>> {
+  if (localSjrMap) return localSjrMap;
+  if (isLoadingLocalSjr) {
+    // Wait for existing load to finish
+    while (isLoadingLocalSjr) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return localSjrMap || new Map();
+  }
+
+  isLoadingLocalSjr = true;
+  try {
+    console.log("[Scholarly BG] Loading local SCImago JSON data...");
+    const url = chrome.runtime.getURL("data/scimagojr_2024.json");
+    const response = await fetch(url);
+    const data = await response.json();
+
+    const map = new Map<string, LocalSjrData>();
+    for (const entry of data) {
+      const sjrEntry: LocalSjrData = {
+        rank: entry["Rank"],
+        hIndex: entry["H index"],
+        sjrBestQuartile: entry["SJR Best Quartile"],
+        title: entry["Title"],
+      };
+
+      const issns = (entry["Issn"] || "").split(",").map((s: string) => s.trim());
+      for (const issn of issns) {
+        if (issn) {
+          map.set(normalizeIssn(issn), sjrEntry);
+        }
+      }
+    }
+
+    localSjrMap = map;
+    console.log(
+      `[Scholarly BG] Indexed ${localSjrMap.size} ISSNs from local SJR data.`,
+    );
+    return localSjrMap;
+  } catch (err) {
+    console.error("[Scholarly BG] Failed to load local SJR data:", err);
+    return new Map();
+  } finally {
+    isLoadingLocalSjr = false;
+  }
+}
+
+/**
+ * Looks up ranking data in the local SCImago dataset using ISSNs.
+ */
+async function augmentWithLocalSjr(ranking: any): Promise<any> {
+  if (
+    !ranking ||
+    (!ranking.issn && (!ranking.issns || ranking.issns.length === 0))
+  ) {
+    return ranking;
+  }
+
+  const map = await loadLocalSjrData();
+  const candidates = [ranking.issn, ...(ranking.issns || [])].filter(Boolean);
+
+  for (const issn of candidates) {
+    const normalized = normalizeIssn(issn);
+    const localData = map.get(normalized);
+    if (localData) {
+      console.log(
+        `[Scholarly BG] Local SJR match found for ISSN ${issn}: ${localData.title}`,
+      );
+      ranking.sjrBestQuartile = localData.sjrBestQuartile;
+      ranking.hIndex = localData.hIndex;
+      ranking.localRank = localData.rank;
+      break;
+    }
+  }
+
   return ranking;
 }
 

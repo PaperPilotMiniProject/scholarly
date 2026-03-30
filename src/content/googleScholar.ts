@@ -282,9 +282,25 @@ async function scrapeArticles(
         badge.className = "scholarly-badge";
         badge.style.cssText =
           "margin-left:8px;padding:2px 6px;background:#1976d2;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-        badge.textContent = `SJR ${Number(scopusRanking.sjr || 0).toFixed(3)} (${scopusRanking.sjrYear || "-"})`;
-
+        
+        let sjrText = `SJR ${Number(scopusRanking.sjr || 0).toFixed(3)}`;
+        if (scopusRanking.sjrBestQuartile) {
+          sjrText += ` (${scopusRanking.sjrBestQuartile})`;
+        } else if (scopusRanking.sjrYear) {
+          sjrText += ` (${scopusRanking.sjrYear})`;
+        }
+        badge.textContent = sjrText;
         a.badgeContainer.appendChild(badge);
+
+        // Add H-Index badge if available
+        if (scopusRanking.hIndex) {
+          const hIndexBadge = document.createElement("span");
+          hIndexBadge.className = "scholarly-badge";
+          hIndexBadge.style.cssText =
+            "margin-left:4px;padding:2px 6px;background:#3f51b5;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
+          hIndexBadge.textContent = `H-Index ${scopusRanking.hIndex}`;
+          a.badgeContainer.appendChild(hIndexBadge);
+        }
 
         if (typeof scopusRanking.snip === "number") {
           const snipBadge = document.createElement("span");
@@ -314,6 +330,7 @@ async function scrapeArticles(
           citeBadge.textContent = `Cited by ${a.citations}`;
           a.badgeContainer.appendChild(citeBadge);
         }
+
       }
 
       collected.push(article);
