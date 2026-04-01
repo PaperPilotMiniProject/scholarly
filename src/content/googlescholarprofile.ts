@@ -11,11 +11,144 @@ type ProfileArticleData = {
   badgeContainer: HTMLElement;
 };
 
+// ─── Author Position Helpers ──────────────────────────────────────────────────
+
+/** Returns the profile owner's display name from the Scholar DOM. */
+function getScholarProfileOwnerName(): string | null {
+  const el = document.querySelector("#gsc_prf_in") as HTMLElement | null;
+  const text = el?.innerText?.trim();
+  return text && text.length > 1 ? text : null;
+}
+
+/** Normalises a name for comparison. */
+function normalizeAuthorName(name: string): string {
+  return name.toLowerCase().replace(/[.,]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Returns the 0-based position of ownerName in a comma-separated authors string,
+ * or null if not found. Handles truncated lists ending with "...".
+ */
+function findAuthorPosition(ownerName: string, authorsStr: string): number | null {
+  if (!ownerName || !authorsStr) return null;
+  const parts = authorsStr.split(",").map((s) => s.trim()).filter(Boolean);
+  const normOwner = normalizeAuthorName(ownerName);
+  const ownerParts = normOwner.split(" ");
+  const ownerLast = ownerParts[ownerParts.length - 1];
+
+  for (let i = 0; i < parts.length; i++) {
+    const norm = normalizeAuthorName(parts[i]);
+    if (norm === normOwner) return i;
+    // Last-name + first-initial match
+    const cParts = norm.split(" ");
+    const cLast = cParts[cParts.length - 1];
+    if (cLast === ownerLast && ownerParts.length >= 2 && cParts.length >= 2) {
+      if (ownerParts[0][0] === cParts[0][0]) return i;
+    }
+    // Single-initial last-name match (e.g. "J Smith" vs "John Smith")
+    if (cLast === ownerLast && (ownerParts.length === 1 || cParts.length === 1)) return i;
+  }
+  return null;
+}
+
+/** Returns badge label and colour for a 0-based author position. */
+function authorPositionBadgeStyle(
+  position: number,
+  total: number,
+  truncated: boolean,
+): { label: string; color: string } {
+  const isLast = !truncated && total > 2 && position === total - 1;
+  if (position === 0) return { label: "\uD83E\uDD47 1st Author", color: "#c0392b" };
+  if (position === 1) return { label: "\uD83E\uDD48 2nd Author", color: "#2980b9" };
+  if (isLast) return { label: "\u21A9 Last Author", color: "#7d3c98" };
+  const ord = (n: number): string => {
+    const s = ["th", "st", "nd", "rd"];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] ?? s[v] ?? s[0] ?? "th");
+  };
+  return { label: `${ord(position + 1)} Author`, color: "#546e7a" };
+}
+
+/** Creates a small badge span. */
+function makePositionBadge(label: string, color: string, tooltip: string): HTMLElement {
+  const badge = document.createElement("span");
+  badge.className = "scholarly-badge";
+  badge.title = tooltip;
+  badge.style.cssText = `
+    display:inline-block;
+    margin-left:6px;
+    padding:2px 7px;
+    background:${color};
+    color:#fff;
+    font-size:11px;
+    font-weight:bold;
+    border-radius:3px;
+    white-space:nowrap;
+    cursor:default;
+    font-family:system-ui,sans-serif;
+    vertical-align:middle;
+  `;
+  badge.textContent = label;
+  return badge;
+}
+
+const POSITION_PANEL_ID = "scholarly-gs-position-panel";
+
+/** Injects or refreshes the AUTHOR POSITIONS summary panel above the paper list. */
+function injectPositionPanel(
+  counts: { first: number; second: number; last: number; other: number },
+): void {
+  document.getElementById(POSITION_PANEL_ID)?.remove();
+  const total = counts.first + counts.second + counts.last + counts.other;
+  if (total === 0) return;
+
+  const anchor =
+    document.querySelector("#gsc_a_b") ??
+    document.querySelector(".gsc_a_b") ??
+    document.querySelector("#gsc_prf_pbl");
+  if (!anchor) return;
+
+  const pill = (label: string, value: number, color: string): string =>
+    `<div style="display:inline-flex;flex-direction:column;align-items:center;
+      background:${color};color:#fff;border-radius:6px;
+      padding:6px 14px;margin-right:8px;min-width:64px;">
+      <span style="font-size:16px;font-weight:bold;">${value}</span>
+      <span style="font-size:10px;opacity:0.9;margin-top:2px;">${label}</span>
+    </div>`;
+
+  const panel = document.createElement("div");
+  panel.id = POSITION_PANEL_ID;
+  panel.style.cssText = `
+    background:#f8f9fa;
+    border:1px solid #dee2e6;
+    border-radius:8px;
+    padding:14px 18px;
+    margin-bottom:14px;
+    font-family:system-ui,sans-serif;
+    font-size:13px;
+    color:#333;
+  `;
+  panel.innerHTML = `
+    <div style="font-weight:600;font-size:13px;color:#111;margin-bottom:10px;">
+      \uD83D\uDCCA Scholarly &mdash; Author Positions
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      ${counts.first > 0 ? pill("1st Author", counts.first, "#c0392b") : ""}
+      ${counts.second > 0 ? pill("2nd Author", counts.second, "#2980b9") : ""}
+      ${counts.last > 0 ? pill("Last Author", counts.last, "#7d3c98") : ""}
+      ${counts.other > 0 ? pill("Other", counts.other, "#546e7a") : ""}
+    </div>
+    <div style="margin-top:8px;font-size:10px;color:#aaa;">Powered by Scholarly</div>
+  `;
+  anchor.insertAdjacentElement("beforebegin", panel);
+}
+
 export function clearProfileBadges(): void {
   document.querySelectorAll(".scholarly-badge").forEach((el) => el.remove());
   document
     .querySelectorAll(".scholarly-badge-anchor")
     .forEach((el) => el.remove());
+  document.getElementById(POSITION_PANEL_ID)?.remove();
 }
 
 function extractDoi(link: string): string | null {
@@ -222,6 +355,10 @@ export async function scrapeGoogleScholarProfile(options?: {
   clearProfileBadges();
   console.log("[Scholarly][Profile] Starting profile scrape...");
 
+  // Detect profile owner name for author position tracking
+  const ownerName = getScholarProfileOwnerName();
+  console.log(`[Scholarly][Profile] Profile owner: ${ownerName ?? "unknown"}`);
+
   const rows = await waitForProfileRows();
   if (!shouldContinue()) {
     return;
@@ -298,6 +435,19 @@ export async function scrapeGoogleScholarProfile(options?: {
         badgeContainer: badgeAnchor,
       });
 
+      // Inject author position badge immediately (no DOI needed)
+      if (ownerName && authors) {
+        const authorList = authors.split(",").map((s) => s.trim()).filter(Boolean);
+        const truncated = authors.trimEnd().endsWith("...");
+        const pos = findAuthorPosition(ownerName, authors);
+        if (pos !== null) {
+          const { label, color } = authorPositionBadgeStyle(pos, authorList.length, truncated);
+          badgeAnchor.appendChild(
+            makePositionBadge(label, color, `Position ${pos + 1} of ${authorList.length} listed authors`),
+          );
+        }
+      }
+
       console.log(
         `[Scholarly][Profile] Article [${index}] DOI: ${doi || "No DOI found"} | ${title.substring(0, 60)}`,
       );
@@ -305,6 +455,24 @@ export async function scrapeGoogleScholarProfile(options?: {
       console.error(`[Scholarly][Profile] Error parsing row ${index}:`, error);
     }
   });
+
+  // Compute and render author position summary panel
+  if (ownerName) {
+    const counts = { first: 0, second: 0, last: 0, other: 0 };
+    articles.forEach((a) => {
+      const authorList = a.authors.split(",").map((s) => s.trim()).filter(Boolean);
+      const truncated = a.authors.trimEnd().endsWith("...");
+      const pos = findAuthorPosition(ownerName, a.authors);
+      if (pos === null) return;
+      if (pos === 0) { counts.first += 1; return; }
+      if (pos === 1) { counts.second += 1; return; }
+      if (!truncated && authorList.length > 2 && pos === authorList.length - 1) {
+        counts.last += 1; return;
+      }
+      counts.other += 1;
+    });
+    injectPositionPanel(counts);
+  }
 
   if (articles.length === 0) {
     console.log("[Scholarly][Profile] No profile articles found to process.");

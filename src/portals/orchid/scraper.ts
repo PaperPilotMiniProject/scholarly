@@ -50,6 +50,40 @@ async function getS2StatsByDoi(doi: string): Promise<S2PaperStats | null> {
 }
 
 
+// ─── Profile Owner Name ───────────────────────────────────────────────────────
+
+/**
+ * Attempts to extract the profile owner's display name from the ORCID DOM.
+ * Tries multiple selectors to handle ORCID's Angular rendering quirks.
+ */
+function getProfileOwnerName(): string | null {
+  const selectors = [
+    ".fullname",
+    "[id*='fullname']",
+    "app-bio h2",
+    ".orcid-header h2",
+    "mat-card h2",
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    const text = el?.textContent?.trim();
+    if (text && text.length > 1) {
+      console.log(`[Scholarly][ORCID] Profile owner name: "${text}" (via "${sel}")`);
+      return text;
+    }
+  }
+  // Fallback: first meaningful h1/h2 that doesn't look like a site heading
+  for (const h of document.querySelectorAll("h1, h2")) {
+    const text = (h as HTMLElement).textContent?.trim();
+    if (text && text.length > 2 && !/orcid|@|search/i.test(text)) {
+      console.log(`[Scholarly][ORCID] Profile owner name (fallback): "${text}"`);
+      return text;
+    }
+  }
+  console.warn("[Scholarly][ORCID] Could not detect profile owner name from DOM");
+  return null;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface OrcidArticle {
@@ -219,6 +253,10 @@ async function _doScrape(
   await waitForWorksSection();
   if (!shouldContinue()) return;
 
+  // ── Step 2.5: Extract profile owner name ─────────────────────────────────
+  const ownerName = getProfileOwnerName();
+  console.log(`[Scholarly][ORCID] Authorship tracking for: ${ownerName ?? "unknown"}`);
+
   // ── Step 3: Fetch work summaries ──────────────────────────────────────────
   const summaries = await fetchWorkSummaries(orcidId);
 
@@ -345,7 +383,7 @@ async function _doScrape(
 
   // ── Step 7: Hand off to injector ──────────────────────────────────────────
   if (shouldContinue()) {
-    injectOrcidBadges(articles);
+    injectOrcidBadges(articles, ownerName);
   }
 }
 

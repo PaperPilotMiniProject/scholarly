@@ -117,14 +117,65 @@ function createBadge(
   return badge;
 }
 
+// ─── Author Position Detection ───────────────────────────────────────────────────────────────────
+
+/** Normalises a name: lowercase, strip punctuation, collapse whitespace. */
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[.,\-]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Returns true if ownerName likely matches contributorName (exact or last-name + initial). */
+function nameMatches(ownerName: string, contributorName: string): boolean {
+  const a = normalizeName(ownerName);
+  const b = normalizeName(contributorName);
+  if (a === b) return true;
+  const aParts = a.split(" ");
+  const bParts = b.split(" ");
+  const aLast = aParts[aParts.length - 1];
+  const bLast = bParts[bParts.length - 1];
+  if (aLast !== bLast) return false;
+  if (aParts.length >= 2 && bParts.length >= 2) {
+    return aParts[0][0] === bParts[0][0];
+  }
+  return true;
+}
+
+/** Returns the 0-based index of the owner in the contributor list, or null if not found. */
+function findOwnerPosition(
+  ownerName: string | null,
+  contributors: { name: string; role: string | null; sequence: string | null }[],
+): number | null {
+  if (!ownerName || contributors.length === 0) return null;
+  const idx = contributors.findIndex((c) => nameMatches(ownerName, c.name));
+  return idx === -1 ? null : idx;
+}
+
+/** Returns badge label and colour for a given 0-based author position. */
+function getPositionBadgeStyle(
+  position: number,
+  totalContributors: number,
+): { label: string; color: string } {
+  const isLast = totalContributors > 2 && position === totalContributors - 1;
+  if (position === 0) return { label: "🥇 1st Author", color: "#c0392b" };
+  if (position === 1) return { label: "🥈 2nd Author", color: "#2980b9" };
+  if (isLast) return { label: "↩ Last Author", color: "#7d3c98" };
+  const ord = (n: number): string => {
+    const s = ["th", "st", "nd", "rd"];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] ?? s[v] ?? s[0] ?? "th");
+  };
+  return { label: `${ord(position + 1)} Author`, color: "#546e7a" };
+}
+
 /**
  * Injects ranking badges for a single article into the ORCID work entry.
  * Returns true if badges were newly injected, false otherwise.
  */
-function injectBadgesForArticle(article: OrcidArticle): boolean {
-  const { scopusRanking, putCode, doi, semanticScholar, citations } = article;
+function injectBadgesForArticle(article: OrcidArticle, ownerName: string | null): boolean {
+  const { scopusRanking, putCode, doi, semanticScholar, citations, contributors } = article;
 
-  if (!scopusRanking && !semanticScholar) return false;
+  const position = findOwnerPosition(ownerName, contributors);
+  if (!scopusRanking && !semanticScholar && position === null) return false;
 
   // Pass doi as primary lookup, putCode for logging only
   const titleEl = findWorkTitleElement(doi, putCode);
@@ -138,6 +189,15 @@ function injectBadgesForArticle(article: OrcidArticle): boolean {
   }
 
   const anchor = getOrCreateBadgeAnchor(titleEl);
+
+  // Author position badge — injected first for prominence
+  if (position !== null) {
+    const total = contributors.length;
+    const { label, color } = getPositionBadgeStyle(position, total);
+    anchor.appendChild(
+      createBadge(label, color, `Position ${position + 1} of ${total} contributor${total !== 1 ? "s" : ""}`),
+    );
+  }
 
   if (scopusRanking) {
     // SJR badge — blue
@@ -216,12 +276,13 @@ interface StatsData {
   avgCiteScore: number | null;
   publicationsByYear: Record<string, number>;
   topJournals: Array<{ name: string; count: number; avgSjr: number | null }>;
+  authorPositions: { first: number; second: number; last: number; other: number };
 }
 
 /**
  * Computes aggregate stats from the enriched article list.
  */
-function computeStats(articles: OrcidArticle[]): StatsData {
+function computeStats(articles: OrcidArticle[], ownerName: string | null): StatsData {
   const ranked = articles.filter((a) => a.scopusRanking !== null);
 
   // Average metrics
@@ -278,6 +339,21 @@ function computeStats(articles: OrcidArticle[]): StatsData {
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
 
+  // Author position breakdown
+  const authorPositions = { first: 0, second: 0, last: 0, other: 0 };
+  if (ownerName) {
+    articles.forEach((a) => {
+      const pos = findOwnerPosition(ownerName, a.contributors);
+      if (pos === null) return;
+      if (pos === 0) { authorPositions.first += 1; return; }
+      if (pos === 1) { authorPositions.second += 1; return; }
+      if (a.contributors.length > 2 && pos === a.contributors.length - 1) {
+        authorPositions.last += 1; return;
+      }
+      authorPositions.other += 1;
+    });
+  }
+
   return {
     totalWorks: articles.length,
     worksWithRanking: ranked.length,
@@ -286,6 +362,7 @@ function computeStats(articles: OrcidArticle[]): StatsData {
     avgCiteScore: avg(csValues),
     publicationsByYear: byYear,
     topJournals,
+    authorPositions,
   };
 }
 
@@ -428,6 +505,19 @@ function injectStatsPanel(stats: StatsData): void {
       ${pill("Total Works", String(stats.totalWorks), "#455a64")}
     </div>
 
+    <!-- Author position breakdown -->
+    ${(stats.authorPositions.first + stats.authorPositions.second + stats.authorPositions.last + stats.authorPositions.other) > 0 ? `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:11px;color:#888;margin-bottom:6px;font-weight:600;letter-spacing:0.5px;">AUTHOR POSITIONS</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${stats.authorPositions.first > 0 ? pill("1st Author", String(stats.authorPositions.first), "#c0392b") : ""}
+        ${stats.authorPositions.second > 0 ? pill("2nd Author", String(stats.authorPositions.second), "#2980b9") : ""}
+        ${stats.authorPositions.last > 0 ? pill("Last Author", String(stats.authorPositions.last), "#7d3c98") : ""}
+        ${stats.authorPositions.other > 0 ? pill("Other", String(stats.authorPositions.other), "#546e7a") : ""}
+      </div>
+    </div>
+    ` : ""}
+
     <div style="display:flex;gap:24px;flex-wrap:wrap;">
       <!-- Publications per year chart -->
       ${
@@ -482,13 +572,13 @@ function injectStatsPanel(stats: StatsData): void {
  * Main entry point called by scraper.ts after data is ready.
  * Injects badges for each article and renders the stats panel.
  */
-export const injectOrcidBadges = (articles: OrcidArticle[]): void => {
+export const injectOrcidBadges = (articles: OrcidArticle[], ownerName: string | null): void => {
   console.log(
     `[Scholarly][ORCID] Beginning continuous badge injection for ${articles.length} articles...`,
   );
 
   // Compute and inject the stats panel (only once)
-  const stats = computeStats(articles);
+  const stats = computeStats(articles, ownerName);
   injectStatsPanel(stats);
 
   if (injectionInterval) {
@@ -498,8 +588,8 @@ export const injectOrcidBadges = (articles: OrcidArticle[]): void => {
   const attemptInjection = () => {
     let injectedThisRound = 0;
     articles.forEach((article) => {
-      if (article.scopusRanking || article.semanticScholar) {
-        if (injectBadgesForArticle(article)) {
+      if (article.scopusRanking || article.semanticScholar || ownerName) {
+        if (injectBadgesForArticle(article, ownerName)) {
           injectedThisRound += 1;
         }
       }
