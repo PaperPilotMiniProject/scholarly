@@ -21,6 +21,9 @@ export function clearProfileBadges(): void {
   document
     .querySelectorAll(".scholarly-interactive-container")
     .forEach((el) => el.remove());
+  document
+    .querySelectorAll(".scholarly-profile-affiliation")
+    .forEach((el) => el.remove());
 }
 
 function injectScholarlyStyles() {
@@ -483,12 +486,116 @@ export async function scrapeGoogleScholarProfile(options?: {
     return;
   }
 
+  // 3.5 Find profile owner affiliation from abstracts
+  let profileAffiliation = "";
+  for (const res of abstractResults) {
+    if (!res) continue;
+    
+    let authorGroups = res.authorGroup;
+    if (authorGroups) {
+      if (!Array.isArray(authorGroups)) authorGroups = [authorGroups];
+      
+      for (const group of authorGroups) {
+         let authors = group.author;
+         if (!authors) continue;
+         if (!Array.isArray(authors)) authors = [authors];
+         
+         const match = authors.find((a: any) => {
+           let n = a?.["ce:indexed-name"] 
+                || a?.["preferred-name"]?.["ce:indexed-name"]
+                || Object.values(a || {}).find(v => typeof v === 'string' && isNameMatch(profileName, v as string));
+           if (!n && a?.["ce:given-name"] && a?.["ce:surname"]) {
+               n = `${a["ce:given-name"]} ${a["ce:surname"]}`;
+           }
+           return n && isNameMatch(profileName, n as string);
+         });
+         
+         if (match) {
+           let aff = group.affiliation;
+           if (aff) {
+              let affiliations = Array.isArray(aff) ? aff : [aff];
+              for (const singleAff of affiliations) {
+                  let affText = singleAff?.["ce:source-text"] || singleAff?.["ce:text"] || singleAff?.["afdispname"] || "";
+                  if (!affText) {
+                      const orgs = Array.isArray(singleAff.organization)
+                        ? singleAff.organization.map((o: any) => o["$"] || o["ce:text"]).join(", ")
+                        : singleAff.organization?.["$"] || singleAff.organization?.["ce:text"] || "";
+                      const country = singleAff.country || singleAff["@country"] || "";
+                      affText = [orgs, country].filter(Boolean).join(", ");
+                  }
+                  if (affText) {
+                    profileAffiliation = affText;
+                    break;
+                  }
+              }
+           }
+         }
+      }
+    } else if (res.correspondence) {
+      const correspondenceList = Array.isArray(res.correspondence) ? res.correspondence : [res.correspondence];
+      for (const item of correspondenceList) {
+          const name = item.person?.["ce:indexed-name"];
+          if (name && isNameMatch(profileName, name)) {
+              let affText = item.affiliation?.["ce:source-text"] || "";
+              if (!affText && item.affiliation) {
+                  const orgs = Array.isArray(item.affiliation.organization)
+                    ? item.affiliation.organization.map((o: any) => o["$"]).join(", ")
+                    : item.affiliation.organization?.["$"] || "";
+                  const country = item.affiliation.country || "";
+                  affText = [orgs, country].filter(Boolean).join(", ");
+              }
+              if (affText && !profileAffiliation) profileAffiliation = affText;
+          }
+      }
+    }
+    if (profileAffiliation) break;
+  }
+
+  // Inject profileAffiliation under #gsc_prf_in
+  if (profileAffiliation && shouldContinue()) {
+    const nameEl = document.getElementById("gsc_prf_in");
+    if (nameEl && nameEl.parentElement) {
+      const affEl = document.createElement("div");
+      affEl.className = "scholarly-profile-affiliation";
+      affEl.style.fontSize = "14px";
+      affEl.style.color = "#4d5156";
+      affEl.style.marginTop = "8px";
+      affEl.style.marginBottom = "8px";
+      affEl.style.display = "flex";
+      affEl.style.alignItems = "center";
+      affEl.style.gap = "6px";
+      affEl.innerHTML = `<span style="font-size:16px;">🏛️</span> <span>${profileAffiliation}</span>`;
+      
+      if (nameEl.nextSibling) {
+          nameEl.parentNode?.insertBefore(affEl, nameEl.nextSibling);
+      } else {
+          nameEl.parentElement.appendChild(affEl);
+      }
+    }
+  }
+
   articles.forEach((article, index) => {
     if (!shouldContinue()) {
       return;
     }
     const res = abstractResults[index];
-    const correspondence = res?.correspondence;
+    let correspondence = res?.correspondence;
+    
+    // Fallback if missing correspondence but has authorGroup
+    if (!correspondence && res?.authorGroup) {
+      let groups = Array.isArray(res.authorGroup) ? res.authorGroup : [res.authorGroup];
+      let firstGroup = groups.length > 0 ? groups[0] : null;
+      if (firstGroup) {
+         let authors = firstGroup.author;
+         let firstAuthor = Array.isArray(authors) ? authors[0] : authors;
+         if (firstAuthor) {
+            correspondence = {
+               person: firstAuthor,
+               affiliation: firstGroup.affiliation
+            };
+         }
+      }
+    }
     
     if (correspondence) {
       const correspondenceList = Array.isArray(correspondence)
@@ -501,7 +608,9 @@ export async function scrapeGoogleScholarProfile(options?: {
       // Determine if any author matches the profile owner
       let isAnyMatched = false;
       correspondenceList.forEach(item => {
-        const name = item.person?.["ce:indexed-name"];
+        let name = item.person?.["ce:indexed-name"] 
+            || item.person?.["preferred-name"]?.["ce:indexed-name"] 
+            || `${item.person?.["ce:given-name"] || ""} ${item.person?.["ce:surname"] || ""}`.trim();
         if (name && isNameMatch(profileName, name)) isAnyMatched = true;
       });
 
@@ -512,16 +621,23 @@ export async function scrapeGoogleScholarProfile(options?: {
 
       let authorInfoHtml = "";
       correspondenceList.forEach((item, cIdx) => {
-        const name = item.person?.["ce:indexed-name"] || "Unknown";
+        let name = item.person?.["ce:indexed-name"] 
+            || item.person?.["preferred-name"]?.["ce:indexed-name"] 
+            || `${item.person?.["ce:given-name"] || ""} ${item.person?.["ce:surname"] || ""}`.trim()
+            || "Unknown";
+            
         const matched = name && isNameMatch(profileName, name);
+        if (matched) {
+            name = profileName;
+        }
         
-        let affText = item.affiliation?.["ce:source-text"] || "";
+        let affText = item.affiliation?.["ce:source-text"] || item.affiliation?.["ce:text"] || item.affiliation?.["afdispname"] || "";
         if (!affText && item.affiliation) {
           const orgs = Array.isArray(item.affiliation.organization)
-            ? item.affiliation.organization.map((o: any) => o["$"]).join(", ")
-            : item.affiliation.organization?.["$"] || "";
-          const country = item.affiliation.country || "";
-          affText = [orgs, country].filter(Boolean).join(", ");
+            ? item.affiliation.organization.map((o: any) => o["$"] || o["ce:text"] || o).filter((x: any) => typeof x === 'string').join(", ")
+            : item.affiliation.organization?.["$"] || item.affiliation.organization?.["ce:text"] || "";
+          const country = item.affiliation.country || item.affiliation?.["@country"] || "";
+          affText = [orgs, typeof country === 'string' ? country : ""].filter(Boolean).join(", ");
         }
 
         authorInfoHtml += `

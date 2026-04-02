@@ -258,24 +258,24 @@ if (chrome && chrome.runtime) {
             }
           })
           .then((data) => {
-            const correspondence =
-              data["abstracts-retrieval-response"]?.item?.bibrecord?.head
-                ?.correspondence;
+            const head = data["abstracts-retrieval-response"]?.item?.bibrecord?.head;
+            const correspondence = head?.correspondence;
+            const authorGroup = head?.["author-group"];
             
-            if (!correspondence) {
-              console.warn(`[Scholarly BG] Correspondence field missing in Scopus response for DOI: ${doi}`);
+            if (!correspondence && !authorGroup) {
+              console.warn(`[Scholarly BG] Author data missing in Scopus response for DOI: ${doi}`);
               // Log the keys to see what we DID get
               console.log("[Scholarly BG] Response keys:", Object.keys(data));
               sendResponse({ 
                 success: false, 
-                error: "Correspondence missing in response",
+                error: "Author data missing in response",
                 rawResponse: data 
               });
               return;
             }
 
-            console.log(`[Scholarly BG] Correspondence found for DOI: ${doi}`);
-            sendResponse({ success: true, correspondence });
+            console.log(`[Scholarly BG] Author data found for DOI: ${doi}`);
+            sendResponse({ success: true, correspondence, authorGroup });
           })
           .catch((err) => {
             sendResponse({ success: false, error: err.message || String(err) });
