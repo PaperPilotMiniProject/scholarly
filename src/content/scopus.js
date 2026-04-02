@@ -34,6 +34,71 @@ function badgeStyle(color) {
 	`;
 }
 
+function buildRankingCard(scopusRanking) {
+	const card = document.createElement("div");
+	card.className = "scholarly-ranking-card";
+	card.style.cssText = `
+		margin-top: 8px;
+		padding: 10px 12px;
+		border: 1px solid #d0d7de;
+		border-radius: 8px;
+		background: #fff;
+		box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+		font-size: 12px;
+		line-height: 1.45;
+		min-width: 280px;
+	`;
+
+	const rows = [
+		["Journal", scopusRanking.title || "-"],
+		["Publisher", scopusRanking.publisher || "-"],
+		["ISSN", (scopusRanking.issns || []).join(", ") || "-"],
+		[
+			"SJR",
+			scopusRanking.sjr
+				? `${Number(scopusRanking.sjr).toFixed(3)} (${scopusRanking.sjrYear || "-"})`
+				: "-",
+		],
+		["Quartile", scopusRanking.sjrBestQuartile || "-"],
+		[
+			"SNIP",
+			scopusRanking.snip
+				? `${Number(scopusRanking.snip).toFixed(3)} (${scopusRanking.snipYear || "-"})`
+				: "-",
+		],
+		[
+			"CiteScore",
+			scopusRanking.citeScore
+				? `${Number(scopusRanking.citeScore).toFixed(2)} (${scopusRanking.citeScoreYear || "-"})`
+				: "-",
+		],
+		[
+			"Open Access",
+			String(scopusRanking.openAccess ?? scopusRanking.openaccess ?? "0") === "1"
+				? "Yes"
+				: "No",
+		],
+	];
+
+	rows.forEach(([label, value]) => {
+		const row = document.createElement("div");
+		row.style.cssText = "display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;";
+
+		const left = document.createElement("span");
+		left.style.cssText = "font-weight:600;color:#111827;";
+		left.textContent = label;
+
+		const right = document.createElement("span");
+		right.style.cssText = "color:#1f2937;text-align:right;";
+		right.textContent = value;
+
+		row.append(left, right);
+		card.appendChild(row);
+	});
+
+	return card;
+}
+
 function extractDoiFromText(text) {
 	if (!text) return null;
 	const match = String(text).match(DOI_REGEX);
@@ -70,11 +135,44 @@ function findTitleElement(container) {
 }
 async function getDoiFromTitle(title) {
   try {
-    const res = await fetch(
-      `https://api.crossref.org/works?query.title=${encodeURIComponent(title)}&rows=1`
-    );
+		const params = new URLSearchParams({
+			"query.bibliographic": title,
+			rows: "5",
+			select: "DOI,title,score",
+			mailto: "scholarly-extension@example.com",
+		});
+		const res = await fetch(
+			`https://api.crossref.org/works?${params.toString()}`
+		);
     const data = await res.json();
-    return data?.message?.items?.[0]?.DOI || null;
+		const items = data?.message?.items || [];
+		if (!items.length) return null;
+
+		const normalize = (s) =>
+			String(s || "")
+				.toLowerCase()
+				.replace(/[^a-z0-9\s]/g, " ")
+				.replace(/\s+/g, " ")
+				.trim();
+
+		const titleNorm = normalize(title);
+		const scored = items
+			.map((item) => {
+				const candidateTitle = Array.isArray(item?.title)
+					? item.title[0] || ""
+					: item?.title || "";
+				const candidateNorm = normalize(candidateTitle);
+				let score = Number(item?.score || 0);
+				if (candidateNorm && titleNorm) {
+					if (candidateNorm === titleNorm) score += 120;
+					else if (candidateNorm.includes(titleNorm) || titleNorm.includes(candidateNorm)) score += 60;
+				}
+				return { doi: item?.DOI || null, score };
+			})
+			.filter((x) => x.doi)
+			.sort((a, b) => b.score - a.score);
+
+		return scored[0]?.doi || null;
   } catch (e) {
     console.error("Crossref error", e);
     return null;
@@ -153,7 +251,34 @@ async function annotateArticle(article, scopusRanking) {
 	cite.textContent = `${scopusRanking.citeScore ?? "-"} CiteScore`;
 	cite.style.cssText = badgeStyle("#0f9d58");
 
-	container.append(sjr, snip, cite);
+	const isOpenAccess =
+		String(scopusRanking.openAccess ?? scopusRanking.openaccess ?? "0") === "1";
+	const oa = document.createElement("span");
+	oa.textContent = isOpenAccess ? "Open Access: Yes" : "Open Access: No";
+	oa.style.cssText = badgeStyle(isOpenAccess ? "#2e7d32" : "#6c757d");
+
+	const cardToggle = document.createElement("button");
+	cardToggle.type = "button";
+	cardToggle.textContent = "Ranking card";
+	cardToggle.className = "scholarly-badge";
+	cardToggle.style.cssText =
+		"display:inline-flex;align-items:center;padding:6px 12px;background:#ffffff;color:#0b7a75;border:1px solid #0b7a75;" +
+		"border-radius:999px;font-weight:700;font-size:12px;cursor:pointer;";
+
+	let cardEl = null;
+	cardToggle.addEventListener("click", (evt) => {
+		evt.preventDefault();
+		evt.stopPropagation();
+		if (cardEl && cardEl.isConnected) {
+			cardEl.remove();
+			cardEl = null;
+			return;
+		}
+		cardEl = buildRankingCard(scopusRanking);
+		container.appendChild(cardEl);
+	});
+
+	container.append(cardToggle, oa, sjr, snip, cite);
 
 	// Insert directly under the title block (<h3> in provided HTML structure)
 	const titleBlock = article.titleEl.closest("h3") || article.titleEl;
@@ -182,7 +307,8 @@ console.log(`[Scholarly][Scopus] Found ${articles.length} articles`);
 		await delay(1000);
 
 		// Prefer an in-page DOI if available; fall back to CrossRef lookup by title
-		let doi = findDoiInContainer(article.container);
+		const directDoi = findDoiInContainer(article.container);
+		let doi = directDoi;
 		if (!doi) {
 			doi = await getDoiFromTitle(article.title);
 		}
@@ -190,6 +316,20 @@ console.log(`[Scholarly][Scopus] Found ${articles.length} articles`);
 		if (!doi) {
 			console.warn(`[Scholarly][Scopus] ✗ No DOI found for title: ${article.title}`);
 			continue;
+		}
+
+		// If fallback DOI is reused for many titles, skip to avoid wrong repeated journal ranking.
+		if (!directDoi) {
+			const duplicateDoiCount = articles.filter((a) => {
+				const txt = a?.container?.textContent || "";
+				return txt.includes(doi);
+			}).length;
+			if (duplicateDoiCount > 1) {
+				console.warn(
+					`[Scholarly][Scopus] Skipping ambiguous DOI fallback ${doi} for title: ${article.title}`,
+				);
+				continue;
+			}
 		}
 
 		console.log(`[Scholarly][Scopus] → DOI: ${doi} | Title: ${article.title.slice(0, 120)}`);

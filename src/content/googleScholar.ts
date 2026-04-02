@@ -49,6 +49,44 @@ function isUserProfilePage(): boolean {
   );
 }
 
+function buildRankingCard(ranking: any): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "scholarly-card";
+  card.style.cssText =
+    "margin-top:6px;padding:10px 12px;border:1px solid #d0d7de;border-radius:8px;" +
+    "box-shadow:0 6px 18px rgba(0,0,0,0.12);background:#fff;max-width:360px;font-size:12px;line-height:1.45;";
+
+  const rows: Array<[string, string]> = [
+    ["Journal", ranking.title || "-"],
+    ["Publisher", ranking.publisher || "-"],
+    ["ISSN", (ranking.issns || []).join(", ") || "-"],
+    ["SJR", ranking.sjr ? `${Number(ranking.sjr).toFixed(3)} (${ranking.sjrYear || "-"})` : "-"],
+    ["Quartile", ranking.sjrBestQuartile || "-"],
+    ["SNIP", ranking.snip ? `${Number(ranking.snip).toFixed(3)} (${ranking.snipYear || "-"})` : "-"],
+    ["CiteScore", ranking.citeScore ? `${Number(ranking.citeScore).toFixed(2)} (${ranking.citeScoreYear || "-"})` : "-"],
+    ["Open Access", ranking.openAccess === "1" ? "Yes" : "No"],
+  ];
+
+  rows.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    row.style.cssText =
+      "display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;";
+
+    const left = document.createElement("span");
+    left.style.cssText = "font-weight:600;color:#111827;";
+    left.textContent = label;
+
+    const right = document.createElement("span");
+    right.style.cssText = "color:#1f2937;text-align:right;";
+    right.textContent = value;
+
+    row.append(left, right);
+    card.appendChild(row);
+  });
+
+  return card;
+}
+
 /**
  * Collects all visible article results from a Google Scholar search page with journal rankings.
  */
@@ -278,6 +316,42 @@ async function scrapeArticles(
       };
 
       if (scopusRanking && shouldContinue()) {
+        const isOpenAccess =
+          String(scopusRanking.openAccess ?? scopusRanking.openaccess ?? "0") === "1";
+
+        const cardToggle = document.createElement("button");
+        cardToggle.type = "button";
+        cardToggle.textContent = "Ranking card";
+        cardToggle.className = "scholarly-badge";
+        cardToggle.style.cssText =
+          "margin-left:4px;padding:4px 12px;background:#ffffff;color:#0b7a75;border:1px solid #0b7a75;" +
+          "font-size:11px;border-radius:999px;font-weight:700;cursor:pointer;";
+
+        let cardEl: HTMLElement | null = null;
+        cardToggle.addEventListener("click", (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          if (cardEl && cardEl.isConnected) {
+            cardEl.remove();
+            cardEl = null;
+            return;
+          }
+          cardEl = buildRankingCard(scopusRanking);
+          a.badgeContainer.appendChild(cardEl);
+        });
+        a.badgeContainer.appendChild(cardToggle);
+
+        const openAccessBadge = document.createElement("span");
+        openAccessBadge.className = "scholarly-badge";
+        openAccessBadge.style.cssText =
+          "margin-left:4px;padding:2px 6px;background:" +
+          (isOpenAccess ? "#2e7d32" : "#6c757d") +
+          ";color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
+        openAccessBadge.textContent = isOpenAccess
+          ? "Open Access: Yes"
+          : "Open Access: No";
+        a.badgeContainer.appendChild(openAccessBadge);
+
         const badge = document.createElement("span");
         badge.className = "scholarly-badge";
         badge.style.cssText =

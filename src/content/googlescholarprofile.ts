@@ -59,10 +59,10 @@ function authorPositionBadgeStyle(
   total: number,
   truncated: boolean,
 ): { label: string; color: string } {
-  const isLast = !truncated && total > 2 && position === total - 1;
-  if (position === 0) return { label: "\uD83E\uDD47 1st Author", color: "#c0392b" };
-  if (position === 1) return { label: "\uD83E\uDD48 2nd Author", color: "#2980b9" };
-  if (isLast) return { label: "\u21A9 Last Author", color: "#7d3c98" };
+  const isLast = !truncated && total >= 2 && position === total - 1;
+  if (position === 0) return { label: "First Author", color: "#c0392b" };
+  if (isLast) return { label: "Last Author", color: "#7d3c98" };
+  if (position === 1) return { label: "Second Author", color: "#2980b9" };
   const ord = (n: number): string => {
     const s = ["th", "st", "nd", "rd"];
     const v = n % 100;
@@ -135,8 +135,8 @@ function injectPositionPanel(
       \uD83D\uDCCA Scholarly &mdash; Author Positions
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;">
-      ${counts.first > 0 ? pill("1st Author", counts.first, "#c0392b") : ""}
-      ${counts.second > 0 ? pill("2nd Author", counts.second, "#2980b9") : ""}
+      ${counts.first > 0 ? pill("First Author", counts.first, "#c0392b") : ""}
+      ${counts.second > 0 ? pill("Second Author", counts.second, "#2980b9") : ""}
       ${counts.last > 0 ? pill("Last Author", counts.last, "#7d3c98") : ""}
       ${counts.other > 0 ? pill("Other", counts.other, "#546e7a") : ""}
     </div>
@@ -256,6 +256,44 @@ function injectScholarlyStyles() {
   `;
   document.head.appendChild(style);
   document.getElementById(POSITION_PANEL_ID)?.remove();
+}
+
+function buildRankingCard(ranking: any): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "scholarly-card";
+  card.style.cssText =
+    "margin-top:8px;padding:10px 12px;border:1px solid #d0d7de;border-radius:8px;" +
+    "box-shadow:0 6px 18px rgba(0,0,0,0.12);background:#fff;max-width:420px;font-size:12px;line-height:1.45;";
+
+  const rows: Array<[string, string]> = [
+    ["Journal", ranking.title || "-"],
+    ["Publisher", ranking.publisher || "-"],
+    ["ISSN", (ranking.issns || []).join(", ") || "-"],
+    ["SJR", ranking.sjr ? `${Number(ranking.sjr).toFixed(3)} (${ranking.sjrYear || "-"})` : "-"],
+    ["Quartile", ranking.sjrBestQuartile || "-"],
+    ["SNIP", ranking.snip ? `${Number(ranking.snip).toFixed(3)} (${ranking.snipYear || "-"})` : "-"],
+    ["CiteScore", ranking.citeScore ? `${Number(ranking.citeScore).toFixed(2)} (${ranking.citeScoreYear || "-"})` : "-"],
+    ["Open Access", ranking.openAccess === "1" ? "Yes" : "No"],
+  ];
+
+  rows.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    row.style.cssText =
+      "display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;";
+
+    const left = document.createElement("span");
+    left.style.cssText = "font-weight:600;color:#111827;";
+    left.textContent = label;
+
+    const right = document.createElement("span");
+    right.style.cssText = "color:#1f2937;text-align:right;";
+    right.textContent = value;
+
+    row.append(left, right);
+    card.appendChild(row);
+  });
+
+  return card;
 }
 
 function extractDoi(link: string): string | null {
@@ -598,10 +636,10 @@ export async function scrapeGoogleScholarProfile(options?: {
       const pos = findAuthorPosition(profileName, a.authors);
       if (pos === null) return;
       if (pos === 0) { counts.first += 1; return; }
-      if (pos === 1) { counts.second += 1; return; }
-      if (!truncated && authorList.length > 2 && pos === authorList.length - 1) {
+      if (!truncated && authorList.length >= 2 && pos === authorList.length - 1) {
         counts.last += 1; return;
       }
+      if (pos === 1) { counts.second += 1; return; }
       counts.other += 1;
     });
     injectPositionPanel(counts);
@@ -828,6 +866,42 @@ export async function scrapeGoogleScholarProfile(options?: {
 
     const scopusRanking = scopusResults[index];
     if (scopusRanking) {
+      const isOpenAccess =
+        String(scopusRanking.openAccess ?? scopusRanking.openaccess ?? "0") === "1";
+
+      const cardToggle = document.createElement("button");
+      cardToggle.type = "button";
+      cardToggle.textContent = "Ranking card";
+      cardToggle.className = "scholarly-badge";
+      cardToggle.style.cssText =
+        "margin-left:6px;padding:4px 12px;background:#ffffff;color:#0b7a75;border:1px solid #0b7a75;" +
+        "font-size:11px;border-radius:999px;font-weight:700;cursor:pointer;";
+
+      let cardEl: HTMLElement | null = null;
+      cardToggle.addEventListener("click", (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        if (cardEl && cardEl.isConnected) {
+          cardEl.remove();
+          cardEl = null;
+          return;
+        }
+        cardEl = buildRankingCard(scopusRanking);
+        article.badgeContainer.appendChild(cardEl);
+      });
+      article.badgeContainer.appendChild(cardToggle);
+
+      const openAccessBadge = document.createElement("span");
+      openAccessBadge.className = "scholarly-badge";
+      openAccessBadge.style.cssText =
+        "margin-left:6px;padding:2px 6px;background:" +
+        (isOpenAccess ? "#2e7d32" : "#6c757d") +
+        ";color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
+      openAccessBadge.textContent = isOpenAccess
+        ? "Open Access: Yes"
+        : "Open Access: No";
+      article.badgeContainer.appendChild(openAccessBadge);
+
       const metricsBubble = document.createElement("div");
       metricsBubble.className = "scholarly-interactive-bubble";
       
