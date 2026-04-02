@@ -158,46 +158,62 @@ if (chrome && chrome.runtime) {
           return;
         }
 
-        const params = new URLSearchParams({
-          apikey: apiKey,
-          view: "STANDARD",
-        });
-        if (instToken) {
-          params.append("insttoken", instToken);
-        }
-
-        const url = `https://api.elsevier.com/content/serial/title/doi/${encodeURIComponent(doi)}?${params.toString()}`;
-        console.log(`[Scholarly BG] Scopus request URL DOI: ${doi}`);
-
-        fetch(url, {
-          headers: {
-            Accept: "application/json",
-          },
-        })
+        fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`)
           .then((r) => r.json())
-          .then((data) => {
-            const entry = data["serial-metadata-response"]?.entry?.[0];
-            if (!entry) {
-              const serviceError =
-                data["service-error"]?.status?.statusText ||
-                data["service-error"]?.statusText ||
-                data["service-error"]?.message ||
-                "DOI not found in Scopus";
-              sendResponse({ success: false, error: serviceError });
+          .then(async (data) => {
+            const issns: string[] = data.message?.ISSN || [];
+            if (!issns.length) {
+              sendResponse({ success: false, error: "No ISSN found in CrossRef for DOI" });
               return;
             }
 
-            const ranking = parseScopusEntry(entry);
-            ranking.doi = doi;
-            augmentWithLocalSjr(ranking).then((augmentedRanking) => {
-              console.log(
-                `[Scholarly BG] Scopus DOI ranking found: ${augmentedRanking.title} | ISSN: ${(augmentedRanking.issns || []).join(", ")}`,
-              );
-              sendResponse({ success: true, ranking: augmentedRanking });
+            const params = new URLSearchParams({
+              apikey: apiKey,
+              view: "ENHANCED",
             });
+            if (instToken) {
+              params.append("insttoken", instToken);
+            }
+
+            const baseUrl = "https://api.elsevier.com/content/serial/title/issn";
+            let candidates: string[] = [];
+            
+            issns.forEach(issn => {
+                const digitsOnly = issn.replace(/-/g, "");
+                const hyphenated = digitsOnly.length === 8 ? `${digitsOnly.slice(0, 4)}-${digitsOnly.slice(4)}` : issn;
+                if (hyphenated) candidates.push(hyphenated);
+                if (digitsOnly) candidates.push(digitsOnly);
+            });
+            candidates = [...new Set(candidates)];
+
+            for (const candidateIssn of candidates) {
+              const url = `${baseUrl}/${candidateIssn}?${params.toString()}`;
+              try {
+                const response = await fetch(url, {
+                  headers: { Accept: "application/json" },
+                });
+                const rData = await response.json();
+                const entry = rData["serial-metadata-response"]?.entry?.[0];
+
+                if (entry) {
+                  let ranking = parseScopusEntry(entry);
+                  ranking.doi = doi;
+                  ranking = await augmentWithLocalSjr(ranking);
+                  console.log(
+                    `[Scholarly BG] Scopus DOI ranking found via ISSN ${candidateIssn}: ${ranking.title}`,
+                  );
+                  sendResponse({ success: true, ranking });
+                  return;
+                }
+              } catch (err: any) {
+                console.warn(`[Scholarly BG] Failed looking up ISSN ${candidateIssn}:`, err);
+              }
+            }
+
+            sendResponse({ success: false, error: "No Scopus ranking found for derived ISSNs." });
           })
           .catch((err) => {
-            sendResponse({ success: false, error: err.message || String(err) });
+            sendResponse({ success: false, error: `CrossRef error: ${err.message}` });
           });
       });
 
