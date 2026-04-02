@@ -590,12 +590,12 @@ export async function scrapeGoogleScholarProfile(options?: {
   });
 
   // Compute and render author position summary panel
-  if (ownerName) {
+  if (profileName) {
     const counts = { first: 0, second: 0, last: 0, other: 0 };
     articles.forEach((a) => {
       const authorList = a.authors.split(",").map((s) => s.trim()).filter(Boolean);
       const truncated = a.authors.trimEnd().endsWith("...");
-      const pos = findAuthorPosition(ownerName, a.authors);
+      const pos = findAuthorPosition(profileName, a.authors);
       if (pos === null) return;
       if (pos === 0) { counts.first += 1; return; }
       if (pos === 1) { counts.second += 1; return; }
@@ -729,6 +729,20 @@ export async function scrapeGoogleScholarProfile(options?: {
     if (!shouldContinue()) {
       return;
     }
+
+    // ── Author Position Badge ──────────────────────────────────────────────
+    if (profileName) {
+      const authorList = article.authors.split(",").map((s) => s.trim()).filter(Boolean);
+      const truncated = article.authors.trimEnd().endsWith("...");
+      const pos = findAuthorPosition(profileName, article.authors);
+      if (pos !== null) {
+        const { label, color } = authorPositionBadgeStyle(pos, authorList.length, truncated);
+        const tooltip = `${profileName} is author #${pos + 1} on this paper`;
+        const badge = makePositionBadge(label, color, tooltip);
+        article.badgeContainer.appendChild(badge);
+      }
+    }
+
     const res = abstractResults[index];
     let correspondence = res?.correspondence;
     
