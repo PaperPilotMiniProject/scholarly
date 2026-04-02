@@ -203,6 +203,87 @@ if (chrome && chrome.runtime) {
 
       return true;
     }
+    if (message.type === "FETCH_SCOPUS_ABSTRACT_BY_DOI") {
+      const doi: string = message.doi;
+      console.log(`[Scholarly BG] Scopus abstract retrieval for DOI: ${doi}`);
+
+      if (!chrome.storage?.local) {
+        sendResponse({
+          success: false,
+          error: "Chrome storage is unavailable in background context.",
+        });
+        return;
+      }
+
+      chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
+        const apiKey = (items.scopusApiKey || "") as string;
+        const instToken = (items.scopusInstToken || "") as string;
+
+        if (!apiKey) {
+          sendResponse({
+            success: false,
+            error:
+              "Scopus API key not configured. Please configure it in extension settings.",
+          });
+          return;
+        }
+
+        const params = new URLSearchParams({
+          apikey: apiKey,
+          httpAccept: "application/json",
+        });
+        if (instToken) {
+          params.append("insttoken", instToken);
+        }
+
+        const url = `https://api.elsevier.com/content/abstract/doi/${encodeURIComponent(doi)}?${params.toString()}`;
+        console.log(`[Scholarly BG] Scopus abstract request URL DOI: ${doi}`);
+
+        fetch(url, {
+          headers: {
+            "Accept": "application/json"
+          }
+        })
+          .then(async (r) => {
+            const text = await r.text();
+            if (!r.ok) {
+              console.warn(`[Scholarly BG] Scopus abstract HTTP error ${r.status} for ${doi}. Response: ${text.substring(0, 200)}`);
+              throw new Error(`Scopus API error ${r.status}`);
+            }
+            try {
+              return JSON.parse(text);
+            } catch (e) {
+              console.error(`[Scholarly BG] JSON parse failed for DOI ${doi}. Response starts with: ${text.substring(0, 100)}`);
+              throw new Error("Invalid JSON response from Scopus");
+            }
+          })
+          .then((data) => {
+            const head = data["abstracts-retrieval-response"]?.item?.bibrecord?.head;
+            const correspondence = head?.correspondence;
+            const authorGroup = head?.["author-group"];
+            
+            if (!correspondence && !authorGroup) {
+              console.warn(`[Scholarly BG] Author data missing in Scopus response for DOI: ${doi}`);
+              // Log the keys to see what we DID get
+              console.log("[Scholarly BG] Response keys:", Object.keys(data));
+              sendResponse({ 
+                success: false, 
+                error: "Author data missing in response",
+                rawResponse: data 
+              });
+              return;
+            }
+
+            console.log(`[Scholarly BG] Author data found for DOI: ${doi}`);
+            sendResponse({ success: true, correspondence, authorGroup });
+          })
+          .catch((err) => {
+            sendResponse({ success: false, error: err.message || String(err) });
+          });
+      });
+
+      return true;
+    }
   });
 }
 
