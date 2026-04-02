@@ -1,4 +1,4 @@
-import { getScopusRankingByDoi } from "../../src/utils/csvParser";
+import { getScopusRankingByDoi, getScopusAbstractByDoi } from "../../src/utils/csvParser";
 
 type ProfileArticleData = {
   title: string;
@@ -9,6 +9,8 @@ type ProfileArticleData = {
   doi: string | null;
   citations: number;
   badgeContainer: HTMLElement;
+  correspondingAuthor?: boolean;
+  correspondingAffiliation?: string;
 };
 
 export function clearProfileBadges(): void {
@@ -16,6 +18,108 @@ export function clearProfileBadges(): void {
   document
     .querySelectorAll(".scholarly-badge-anchor")
     .forEach((el) => el.remove());
+  document
+    .querySelectorAll(".scholarly-interactive-container")
+    .forEach((el) => el.remove());
+}
+
+function injectScholarlyStyles() {
+  if (document.getElementById("scholarly-styles")) return;
+  const style = document.createElement("style");
+  style.id = "scholarly-styles";
+  style.textContent = `
+    .scholarly-interactive-container {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin-left: 12px;
+      vertical-align: middle;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+    .scholarly-interactive-bubble {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #ffffff;
+      border: 1px solid #e0e0e0;
+      border-radius: 50%;
+      height: 28px;
+      width: 28px;
+      cursor: help;
+      transition: all 0.2s ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .scholarly-interactive-bubble:hover {
+      border-color: #bdbdbd;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+      background: #fdfdfd;
+    }
+    .scholarly-bubble-icon {
+      font-weight: 700;
+      font-size: 11px;
+      color: #5f6368;
+      pointer-events: none;
+    }
+    .scholarly-bubble-popover {
+      position: absolute;
+      top: 34px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-10px);
+      background: #ffffff;
+      border: 1px solid #dcdcdc;
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      z-index: 10000;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      min-width: 200px;
+      max-width: 450px;
+      pointer-events: none;
+    }
+    .scholarly-interactive-bubble:hover .scholarly-bubble-popover {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
+    /* Arrow for popover */
+    .scholarly-bubble-popover::before {
+      content: '';
+      position: absolute;
+      top: -6px;
+      left: 50%;
+      transform: translateX(-50%) rotate(45deg);
+      width: 10px;
+      height: 10px;
+      background: #ffffff;
+      border-top: 1px solid #dcdcdc;
+      border-left: 1px solid #dcdcdc;
+    }
+    .scholarly-mini-badge {
+      padding: 4px 8px;
+      background: #f1f3f4;
+      color: #3c4043;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 11px;
+      margin: 2px;
+      display: inline-block;
+      border: 1px solid #e0e0e0;
+    }
+    .scholarly-popover-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+    .scholarly-popover-row:last-child {
+      margin-bottom: 0;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
 function extractDoi(link: string): string | null {
@@ -69,7 +173,46 @@ async function resolveProfileArticleDoi(link: string): Promise<string | null> {
 }
 
 function normalizeText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
+  return text
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove accents
+    .replace(/[-.,]/g, " ") // Replace hyphens/punctuation with space
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNameMatch(profileName: string, correspondenceName: string): boolean {
+  const pName = normalizeText(profileName);
+  const cName = normalizeText(correspondenceName);
+
+  if (!pName || !cName) return false;
+
+  const pTokens = pName.split(" ").filter((t) => t.length > 0);
+  const cTokens = cName.split(" ").filter((t) => t.length > 0);
+
+  // Exact match after normalization
+  if (pName === cName) return true;
+
+  // Check if ALL profile tokens are present in correspondence name (shorter matches longer usually)
+  // or vice-versa
+  const match = (source: string[], target: string[]) => {
+    return source.every((st) => {
+      if (st.length === 1) {
+        return target.some((tt) => tt.startsWith(st));
+      }
+      return target.some((tt) => tt === st || tt.startsWith(st) || st.startsWith(tt));
+    });
+  };
+
+  const result = match(pTokens, cTokens) || match(cTokens, pTokens);
+
+  if (result) {
+    console.log(`[Scholarly][Match] ✓ SUCCESS: "${profileName}" matches "${correspondenceName}"`);
+  } else {
+    // We already log the attempt in the caller, but this is a final check
+  }
+
+  return result;
 }
 
 function scoreCrossrefCandidate(
@@ -220,7 +363,12 @@ export async function scrapeGoogleScholarProfile(options?: {
   }
 
   clearProfileBadges();
+  injectScholarlyStyles();
   console.log("[Scholarly][Profile] Starting profile scrape...");
+
+  const profileNameEl = document.getElementById("gsc_prf_in");
+  const profileName = profileNameEl ? profileNameEl.innerText.trim() : "";
+  console.log(`[Scholarly][Profile] Profile Owner: ${profileName}`);
 
   const rows = await waitForProfileRows();
   if (!shouldContinue()) {
@@ -240,16 +388,15 @@ export async function scrapeGoogleScholarProfile(options?: {
       ) as HTMLAnchorElement | null;
       if (!titleLink) return;
 
-      let badgeAnchor = titleCell.querySelector(
-        ".scholarly-badge-anchor",
+      let interactiveContainer = titleCell.querySelector(
+        ".scholarly-interactive-container",
       ) as HTMLElement | null;
-      if (!badgeAnchor) {
-        badgeAnchor = document.createElement("span");
-        badgeAnchor.className = "scholarly-badge-anchor";
-        badgeAnchor.style.cssText = "display:inline-flex;flex-wrap:wrap;";
-        titleLink.insertAdjacentElement("afterend", badgeAnchor);
+      if (!interactiveContainer) {
+        interactiveContainer = document.createElement("span");
+        interactiveContainer.className = "scholarly-interactive-container";
+        titleLink.insertAdjacentElement("afterend", interactiveContainer);
       }
-
+      
       const title = titleLink.innerText.trim();
       if (!title) return;
 
@@ -295,7 +442,7 @@ export async function scrapeGoogleScholarProfile(options?: {
         link,
         doi,
         citations,
-        badgeContainer: badgeAnchor,
+        badgeContainer: interactiveContainer,
       });
 
       console.log(
@@ -311,30 +458,26 @@ export async function scrapeGoogleScholarProfile(options?: {
     return;
   }
 
-  // Profile links are usually Scholar internal links. Resolve DOI by fetching
-  // each citation page and extracting DOI from the page HTML when needed.
+  // 1. Resolve DOIs where missing
   await runWithConcurrency(articles, 4, async (article, index) => {
-    if (!shouldContinue()) {
-      return;
-    }
-
-    if (article.doi) {
-      return;
-    }
-
-    const resolvedDoi = await resolveProfileArticleDoiWithCrossref(article);
-    article.doi = resolvedDoi;
-
-    console.log(
-      `[Scholarly][Profile] Resolved DOI [${index}]: ${resolvedDoi || "No DOI found"} | ${article.title.substring(0, 60)}`,
-    );
+    if (!shouldContinue() || article.doi) return;
+    article.doi = await resolveProfileArticleDoiWithCrossref(article);
+    console.log(`[Scholarly][Profile] Resolved DOI [${index}]: ${article.doi || "N/A"}`);
   });
 
-  const scopusResults = await Promise.all(
-    articles.map((article) =>
-      article.doi ? getScopusRankingByDoi(article.doi) : Promise.resolve(null),
-    ),
-  );
+  // 2. Fetch Scopus Rankings (Concurrently)
+  const scopusResults: any[] = new Array(articles.length).fill(null);
+  await runWithConcurrency(articles, 2, async (article, index) => {
+    if (!shouldContinue() || !article.doi) return;
+    scopusResults[index] = await getScopusRankingByDoi(article.doi);
+  });
+
+  // 3. Fetch Scopus Abstracts (Concurrently)
+  const abstractResults: any[] = new Array(articles.length).fill(null);
+  await runWithConcurrency(articles, 2, async (article, index) => {
+    if (!shouldContinue() || !article.doi) return;
+    abstractResults[index] = await getScopusAbstractByDoi(article.doi);
+  });
 
   if (!shouldContinue()) {
     return;
@@ -344,63 +487,101 @@ export async function scrapeGoogleScholarProfile(options?: {
     if (!shouldContinue()) {
       return;
     }
+    const res = abstractResults[index];
+    const correspondence = res?.correspondence;
+    
+    if (correspondence) {
+      const correspondenceList = Array.isArray(correspondence)
+        ? correspondence
+        : [correspondence];
+
+      const caBubble = document.createElement("div");
+      caBubble.className = "scholarly-interactive-bubble";
+      
+      // Determine if any author matches the profile owner
+      let isAnyMatched = false;
+      correspondenceList.forEach(item => {
+        const name = item.person?.["ce:indexed-name"];
+        if (name && isNameMatch(profileName, name)) isAnyMatched = true;
+      });
+
+      // User asked for a distinct circle background if matched
+      const iconBg = isAnyMatched ? "#fef7e0" : "#f1f3f4";
+      const iconColor = isAnyMatched ? "#e37400" : "#5f6368";
+      const iconBorder = isAnyMatched ? "1px solid #fbd663" : "none";
+
+      let authorInfoHtml = "";
+      correspondenceList.forEach((item, cIdx) => {
+        const name = item.person?.["ce:indexed-name"] || "Unknown";
+        const matched = name && isNameMatch(profileName, name);
+        
+        let affText = item.affiliation?.["ce:source-text"] || "";
+        if (!affText && item.affiliation) {
+          const orgs = Array.isArray(item.affiliation.organization)
+            ? item.affiliation.organization.map((o: any) => o["$"]).join(", ")
+            : item.affiliation.organization?.["$"] || "";
+          const country = item.affiliation.country || "";
+          affText = [orgs, country].filter(Boolean).join(", ");
+        }
+
+        authorInfoHtml += `
+          <div class="scholarly-popover-row">
+            <div style="font-size: 13px; ${matched ? "color:#e37400; font-weight:700;" : "color:#202124; font-weight:600;"}">${name}</div>
+            ${affText ? `<div style="color: #5f6368; font-size: 11px; white-space: normal; line-height:1.4;">${affText}</div>` : ""}
+          </div>
+        `;
+        if (cIdx < correspondenceList.length - 1) {
+          authorInfoHtml += '<hr style="border:0; border-top:1px solid #eee; margin:8px 0;">';
+        }
+      });
+
+      caBubble.innerHTML = `
+        <div class="scholarly-bubble-icon" style="background:${iconBg}; color:${iconColor}; border:${iconBorder}; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center;">CA</div>
+        <div class="scholarly-bubble-popover">
+          <div style="font-size: 11px; color:#70757a; margin-bottom:8px; border-bottom:1px solid #f1f3f4; padding-bottom:4px;">Corresponding Author</div>
+          ${authorInfoHtml}
+        </div>
+      `;
+      article.badgeContainer.appendChild(caBubble);
+    }
 
     const scopusRanking = scopusResults[index];
-    if (!scopusRanking) {
-      return;
+    if (scopusRanking) {
+      const metricsBubble = document.createElement("div");
+      metricsBubble.className = "scholarly-interactive-bubble";
+      
+      let metricsHtml = "";
+      
+      // SJR
+      const sjrVal = Number(scopusRanking.sjr || 0).toFixed(3);
+      const qVal = scopusRanking.sjrBestQuartile || "";
+      metricsHtml += `<div class="scholarly-mini-badge" style="background:#e8f0fe; color:#1967d2; border-color:#d2e3fc;">SJR ${sjrVal} ${qVal ? `(${qVal})` : ""}</div>`;
+      
+      // H-Index
+      if (scopusRanking.hIndex) {
+        metricsHtml += `<div class="scholarly-mini-badge" style="background:#f3e5f5; color:#7b1fa2; border-color:#e1bee7;">H-Index ${scopusRanking.hIndex}</div>`;
+      }
+      
+      // CiteScore
+      if (scopusRanking.citeScore) {
+        metricsHtml += `<div class="scholarly-mini-badge" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">CS ${scopusRanking.citeScore.toFixed(2)}</div>`;
+      }
+
+      // SNIP
+      if (scopusRanking.snip) {
+        metricsHtml += `<div class="scholarly-mini-badge" style="background:#fff3e0; color:#e65100; border-color:#ffe0b2;">SNIP ${scopusRanking.snip.toFixed(2)}</div>`;
+      }
+
+      metricsBubble.innerHTML = `
+        <div class="scholarly-bubble-icon" style="background:#f1f3f4; color:#5f6368; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center;">📊</div>
+        <div class="scholarly-bubble-popover" style="min-width: 250px;">
+          <div style="font-size: 11px; color:#70757a; margin-bottom:8px; border-bottom:1px solid #f1f3f4; padding-bottom:4px;">Journal Rankings</div>
+          <div style="display:flex; flex-wrap:wrap; gap:4px;">${metricsHtml}</div>
+        </div>
+      `;
+      article.badgeContainer.appendChild(metricsBubble);
     }
 
-    const sjrBadge = document.createElement("span");
-    sjrBadge.className = "scholarly-badge";
-    sjrBadge.style.cssText =
-      "margin-left:8px;padding:2px 6px;background:#1976d2;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-    
-    let sjrText = `SJR ${Number(scopusRanking.sjr || 0).toFixed(3)}`;
-    if (scopusRanking.sjrBestQuartile) {
-      sjrText += ` (${scopusRanking.sjrBestQuartile})`;
-    } else if (scopusRanking.sjrYear) {
-      sjrText += ` (${scopusRanking.sjrYear})`;
-    }
-    sjrBadge.textContent = sjrText;
-    article.badgeContainer.appendChild(sjrBadge);
-
-    // Add H-Index badge if available
-    if (scopusRanking.hIndex) {
-      const hIndexBadge = document.createElement("span");
-      hIndexBadge.className = "scholarly-badge";
-      hIndexBadge.style.cssText =
-        "margin-left:4px;padding:2px 6px;background:#3f51b5;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-      hIndexBadge.textContent = `H-Index ${scopusRanking.hIndex}`;
-      article.badgeContainer.appendChild(hIndexBadge);
-    }
-
-
-    if (typeof scopusRanking.snip === "number") {
-      const snipBadge = document.createElement("span");
-      snipBadge.className = "scholarly-badge";
-      snipBadge.style.cssText =
-        "margin-left:4px;padding:2px 6px;background:#8e24aa;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-      snipBadge.textContent = `SNIP ${scopusRanking.snip.toFixed(3)} (${scopusRanking.snipYear || "-"})`;
-      article.badgeContainer.appendChild(snipBadge);
-    }
-
-    if (scopusRanking.citeScore) {
-      const citeScoreBadge = document.createElement("span");
-      citeScoreBadge.className = "scholarly-badge";
-      citeScoreBadge.style.cssText =
-        "margin-left:4px;padding:2px 6px;background:#4caf50;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-      citeScoreBadge.textContent = `CiteScore ${scopusRanking.citeScore.toFixed(2)} (${scopusRanking.citeScoreYear})`;
-      article.badgeContainer.appendChild(citeScoreBadge);
-    }
-
-    if (article.citations) {
-      const citeBadge = document.createElement("span");
-      citeBadge.className = "scholarly-badge";
-      citeBadge.style.cssText =
-        "margin-left:4px;padding:2px 6px;background:#ff9800;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-      citeBadge.textContent = `Cited by ${article.citations}`;
-      article.badgeContainer.appendChild(citeBadge);
-    }
   });
 
   const withRanking = scopusResults.filter((result) => Boolean(result)).length;

@@ -64,3 +64,22 @@ export async function getScopusRankingByIssns(
   }
   return null;
 }
+/**
+ * Fetches abstract and correspondence data from Scopus Abstract Retrieval API.
+ */
+export async function getScopusAbstractByDoi(doi: string): Promise<any | null> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "FETCH_SCOPUS_ABSTRACT_BY_DOI", doi },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("[Scholarly] sendMessage error:", chrome.runtime.lastError);
+          resolve(null);
+          return;
+        }
+        // Return the whole response object to allow debugging of fields/errors in the content script
+        resolve(response);
+      },
+    );
+  });
+}
