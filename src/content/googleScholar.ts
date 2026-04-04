@@ -316,6 +316,8 @@ async function scrapeArticles(
       };
 
       if (scopusRanking && shouldContinue()) {
+
+        console.log("Scoper ranking",scopusRanking);
         const isOpenAccess =
           String(scopusRanking.openAccess ?? scopusRanking.openaccess ?? "0") === "1";
 
