@@ -16,489 +16,321 @@ interface Article {
   citations?: number;
   ranking?: any;
   scopusRanking?: any;
-  // allow multiple data sources to be augmented later
   extra?: Record<string, unknown>;
 }
 
-/**
- * Removes all ranking badges injected by Scholarly from the page.
- */
 function clearBadges(): void {
   document.querySelectorAll(".scholarly-badge").forEach((el) => el.remove());
+  document.querySelectorAll(".scholarly-interactive-container").forEach((el) => el.remove());
+  document.querySelectorAll(".scholarly-interactive-bubble").forEach((el) => el.remove());
+  document.querySelectorAll(".scholarly-static-pill").forEach((el) => el.remove());
+  document.querySelectorAll(".scholarly-q-tag").forEach((el) => el.remove());
   console.log("[Scholarly] Badges cleared");
 }
 
-/**
- * Extracts a DOI from a URL, e.g. https://www.pnas.org/doi/10.1073/pnas.xxx
- */
 function extractDoi(link: string): string | null {
   const match = link.match(/\b(10\.\d{4,}\/\S+)/);
   if (!match) return null;
-  // strip trailing punctuation that may have been captured
   return match[1].replace(/[.,;)\]]+$/, "");
 }
 
-/**
- * Detects if we're on a user profile page or search results page.
- */
 function isUserProfilePage(): boolean {
-  // User profile pages have URLs like: /citations?user=ZpBeJ_IAAAAJ&hl=en
   return (
     /\/citations/.test(window.location.pathname) &&
     /user=/.test(window.location.search)
   );
 }
 
-function buildRankingCard(ranking: any): HTMLElement {
-  const card = document.createElement("div");
-  card.className = "scholarly-card";
-  card.style.cssText =
-    "margin-top:6px;padding:10px 12px;border:1px solid #d0d7de;border-radius:8px;" +
-    "box-shadow:0 6px 18px rgba(0,0,0,0.12);background:#fff;max-width:360px;font-size:12px;line-height:1.45;";
-
-  const rows: Array<[string, string]> = [
-    ["Journal", ranking.title || "-"],
-    ["Publisher", ranking.publisher || "-"],
-    ["ISSN", (ranking.issns || []).join(", ") || "-"],
-    ["SJR", ranking.sjr ? `${Number(ranking.sjr).toFixed(3)} (${ranking.sjrYear || "-"})` : "-"],
-    ["Quartile", ranking.sjrBestQuartile || "-"],
-    ["SNIP", ranking.snip ? `${Number(ranking.snip).toFixed(3)} (${ranking.snipYear || "-"})` : "-"],
-    ["CiteScore", ranking.citeScore ? `${Number(ranking.citeScore).toFixed(2)} (${ranking.citeScoreYear || "-"})` : "-"],
-    ["Open Access", ranking.openAccess === "1" ? "Yes" : "No"],
-  ];
-
-  rows.forEach(([label, value]) => {
-    const row = document.createElement("div");
-    row.style.cssText =
-      "display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;";
-
-    const left = document.createElement("span");
-    left.style.cssText = "font-weight:600;color:#111827;";
-    left.textContent = label;
-
-    const right = document.createElement("span");
-    right.style.cssText = "color:#1f2937;text-align:right;";
-    right.textContent = value;
-
-    row.append(left, right);
-    card.appendChild(row);
-  });
-
-  return card;
+function injectScholarlyStyles() {
+  // Always replace to ensure latest styles
+  document.getElementById("scholarly-styles")?.remove();
+  const style = document.createElement("style");
+  style.id = "scholarly-styles";
+  style.textContent = `
+    .scholarly-interactive-container {
+      display: inline-flex !important;
+      align-items: center !important;
+      gap: 6px !important;
+      margin-left: 12px !important;
+      vertical-align: middle !important;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+      position: relative !important;
+    }
+    /* When any bubble inside is hovered, elevate the ENTIRE container above all siblings */
+    .scholarly-interactive-container:has(.scholarly-interactive-bubble:hover) {
+      z-index: 99999 !important;
+    }
+    .scholarly-interactive-bubble {
+      position: relative !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: #ffffff !important;
+      border: 1px solid #e1e4e8 !important;
+      border-radius: 50% !important;
+      width: 24px !important;
+      height: 24px !important;
+      cursor: help !important;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06) !important;
+      flex-shrink: 0 !important;
+    }
+    .scholarly-interactive-bubble:hover {
+      border-color: #1a73e8 !important;
+      box-shadow: 0 4px 12px rgba(26, 115, 232, 0.15) !important;
+      transform: translateY(-1px) !important;
+      z-index: 99999 !important;
+    }
+    .scholarly-badge-circle {
+      width: 100% !important;
+      height: 100% !important;
+      border-radius: 50% !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      font-size: 10px !important;
+      font-weight: 800 !important;
+    }
+    .scholarly-static-pill {
+      display: inline-flex !important;
+      align-items: center !important;
+      height: 22px !important;
+      padding: 0 8px !important;
+      background: #ffffff !important;
+      border: 1px solid #e1e4e8 !important;
+      border-radius: 6px !important;
+      font-size: 11px !important;
+      font-weight: 700 !important;
+      color: #202124 !important;
+      white-space: nowrap !important;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
+    }
+    .scholarly-q-tag {
+      font-size: 10px !important;
+      font-weight: 800 !important;
+      padding: 2px 8px !important;
+      border-radius: 6px !important;
+      text-transform: uppercase !important;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+      height: 22px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+    }
+    .scholarly-bubble-popover {
+      position: absolute !important;
+      top: 32px !important;
+      left: 50% !important;
+      transform: translateX(-50%) translateY(-10px) !important;
+      background-color: #ffffff !important;
+      border: 1px solid #bbb !important;
+      border-radius: 12px !important;
+      padding: 16px !important;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.3) !important;
+      z-index: 99999 !important;
+      opacity: 0 !important;
+      visibility: hidden !important;
+      transition: opacity 0.2s ease, visibility 0.2s ease, transform 0.2s ease !important;
+      min-width: 300px !important;
+      max-width: 450px !important;
+      pointer-events: none !important;
+      isolation: isolate !important;
+    }
+    .scholarly-interactive-bubble:hover > .scholarly-bubble-popover {
+      opacity: 1 !important;
+      visibility: visible !important;
+      transform: translateX(-50%) translateY(0) !important;
+      pointer-events: auto !important;
+    }
+    .scholarly-bubble-popover::before {
+      content: '' !important;
+      position: absolute !important;
+      top: -6px !important;
+      left: 50% !important;
+      transform: translateX(-50%) rotate(45deg) !important;
+      width: 10px !important;
+      height: 10px !important;
+      background: #ffffff !important;
+      border-top: 1px solid #bbb !important;
+      border-left: 1px solid #bbb !important;
+      z-index: 1 !important;
+    }
+    .scholarly-popover-row {
+      display: flex !important;
+      justify-content: space-between !important;
+      gap: 12px !important;
+      margin-bottom: 8px !important;
+      background: transparent !important;
+    }
+    .scholarly-popover-row:last-child {
+      margin-bottom: 0 !important;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
-/**
- * Collects all visible article results from a Google Scholar search page with journal rankings.
- */
-async function scrapeArticles(
-  shouldContinue: () => boolean = () => true,
-): Promise<void> {
+function normalizeText(text: string): string {
+  return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[-.,]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+  let nextIndex = 0;
+  async function runWorker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      await worker(items[current], current);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, limit) }, () => runWorker()));
+}
+
+async function scrapeArticles(shouldContinue: () => boolean = () => true): Promise<void> {
   if (!shouldContinue()) return;
   clearBadges();
+  injectScholarlyStyles();
   console.log("[Scholarly] Starting Google Scholar scrape...");
 
   try {
-    // ── Phase 1: collect DOM data synchronously ──────────────────────────────
-    type ArticleData = {
-      titleEl: HTMLElement;
-      badgeContainer: HTMLElement;
-      title: string;
-      link: string;
-      doi: string | null;
-      journal: string;
-      year: string;
-      citations: number;
-    };
-
-    // Determine selector based on page type
     const isProfile = isUserProfilePage();
     const selector = isProfile ? ".gsc_a_tr" : ".gs_r";
-
     const results = document.querySelectorAll(selector);
-    console.log(
-      `[Scholarly] Found ${results.length} result containers (Page type: ${isProfile ? "Profile" : "Search"})`,
-    );
-    const articles: ArticleData[] = [];
-
-    results.forEach((row, index) => {
+    
+    const articles: any[] = [];
+    results.forEach((row) => {
       try {
         let titleEl: HTMLElement | null = null;
         let badgeContainer: HTMLElement | null = null;
         let title = "";
         let linkEl: HTMLAnchorElement | null = null;
-        let sourceEl: HTMLElement | null = null;
-        let citationsCell: HTMLTableCellElement | null = null;
 
         if (isProfile) {
-          // User profile page: table row structure (.gsc_a_tr)
-          // Title and citation source are in the first cell with class gsc_a_t
           titleEl = row.querySelector(".gsc_a_t") as HTMLElement | null;
           if (!titleEl) return;
-
-          // Extract title from the link
           const titleLink = titleEl.querySelector("a");
           if (!titleLink) return;
-
           title = titleLink.innerText.trim();
-          if (!title) return;
-
-          linkEl = titleLink as HTMLAnchorElement;
-
-          badgeContainer = titleLink; // Append badges to the title link
-
-          // Citation count is in the cell with class gsc_a_c
-          citationsCell = row.querySelector(
-            ".gsc_a_c",
-          ) as HTMLTableCellElement | null;
-
-          // Year is in the cell with class gsc_a_y
-          const yearCell = row.querySelector(".gsc_a_y") as HTMLElement | null;
-          if (yearCell) {
-            const yearMatch = yearCell.innerText.match(/\b(19|20)\d{2}\b/);
-            if (yearMatch) {
-              // Year will be set later
-            }
-          }
+          linkEl = titleLink;
+          badgeContainer = titleLink;
         } else {
-          // Search results page: .gs_r structure
           titleEl = row.querySelector(".gs_rt") as HTMLElement | null;
           if (!titleEl) return;
-
           title = titleEl.innerText.trim();
-          if (!title) return;
-
-          linkEl = titleEl.querySelector("a") as HTMLAnchorElement | null;
-          badgeContainer = titleEl; // Append badges to title element
-          sourceEl = row.querySelector(".gs_a") as HTMLElement | null;
-
-          row.querySelectorAll(".gs_fl a").forEach((a) => {
-            const t = a.textContent || "";
-            if (t.startsWith("Cited by")) {
-              // Will process later
-            }
-          });
+          linkEl = titleEl.querySelector("a");
+          badgeContainer = titleEl;
         }
 
         const link = linkEl ? linkEl.href : "";
         const doi = extractDoi(link);
-
-        let journal = "";
-        let year = "";
-        let citations = 0;
-
-        if (isProfile) {
-          // For profile pages, extract year from the year cell
-          const yearCell = row.querySelector(".gsc_a_y") as HTMLElement | null;
-          if (yearCell) {
-            const yearMatch = yearCell.innerText.match(/\b(19|20)\d{2}\b/);
-            if (yearMatch) year = yearMatch[0];
-          }
-
-          // Extract citations from the citation cell
-          if (citationsCell) {
-            const citText = citationsCell.innerText.trim();
-            if (citText) {
-              const citMatch = citText.match(/\d+/);
-              if (citMatch) citations = parseInt(citMatch[0], 10);
-            }
-          }
-
-          // Extract journal/source info from the gray text under title
-          const grayTexts = titleEl.querySelectorAll(".gs_gray");
-          if (grayTexts.length > 0) {
-            const sourceText = (grayTexts[grayTexts.length - 1] as HTMLElement)
-              .innerText; // Usually the last gray text line
-            console.log(`[Scholarly] Source text [${index}]: "${sourceText}"`);
-
-            let parts = sourceText.split(" - ");
-            if (parts.length >= 2) {
-              journal = parts[0].trim();
-              const yearMatch = sourceText.match(/\b(19|20)\d{2}\b/);
-              if (yearMatch && !year) year = yearMatch[0];
-            }
-          }
-        } else if (sourceEl) {
-          // Search results page processing
-          const sourceText = sourceEl.innerText;
-          console.log(`[Scholarly] Source text [${index}]: "${sourceText}"`);
-
-          row.querySelectorAll(".gs_fl a").forEach((a) => {
-            const t = a.textContent || "";
-            if (t.startsWith("Cited by")) {
-              const num = parseInt(t.replace(/[^0-9]/g, ""), 10);
-              if (!isNaN(num)) citations = num;
-            }
-          });
-
-          let parts = sourceText.split(" - ");
-          if (parts.length >= 2) {
-            let potentialJournal = parts[1].trim();
-            potentialJournal = potentialJournal
-              .replace(/,?\s*\d{4}\s*$/, "")
-              .trim();
-            potentialJournal = potentialJournal.replace(/,+$/, "").trim();
-            journal = potentialJournal;
-            const yearMatch = sourceText.match(/\b(19|20)\d{2}\b/);
-            if (yearMatch) year = yearMatch[0];
-          } else {
-            parts = sourceText.split(",");
-            if (parts.length >= 2) {
-              journal = parts[1]
-                .trim()
-                .replace(/,?\s*\d{4}\s*$/, "")
-                .trim();
-            }
-          }
-        }
-
-        articles.push({
-          titleEl,
-          badgeContainer: badgeContainer!,
-          title,
-          link,
-          doi,
-          journal,
-          year,
-          citations,
-        });
-      } catch (error) {
-        console.error(`[Scholarly] Error parsing result ${index}:`, error);
-      }
+        
+        articles.push({ titleEl, badgeContainer: badgeContainer!, title, link, doi });
+      } catch (e) { console.error(e); }
     });
 
-
-    // ── Phase 2: log extracted title -> DOI mapping ───────────────────────────
-    articles.forEach((a, i) => {
-      console.log(
-        `[Scholarly] Title -> DOI [${i}]: "${a.title}" -> ${a.doi || "No DOI found"}`,
-      );
+    const scopusResults: any[] = new Array(articles.length).fill(null);
+    await runWithConcurrency(articles, 3, async (article, index) => {
+      if (article.doi && shouldContinue()) scopusResults[index] = await getScopusRankingByDoi(article.doi);
     });
-
-    // ── Phase 3: fetch Scopus rankings via DOI only ────────────────────────────
-    console.log(
-      "[Scholarly] Fetching Scopus rankings by DOI for all articles...",
-    );
-    const scopusResults = await Promise.all(
-      articles.map((a) =>
-        a.doi ? getScopusRankingByDoi(a.doi) : Promise.resolve(null),
-      ),
-    );
 
     if (!shouldContinue()) return;
 
-    // ── Phase 4: match rankings and inject badges ─────────────────────────────
-    const collected: Article[] = [];
+    articles.forEach((a, index) => {
+      const ranking = scopusResults[index];
+      if (!ranking) return;
 
-    articles.forEach((a, i) => {
-      const scopusRanking = scopusResults[i];
-      let ranking: any = null;
-      console.log(`[Scholarly] Ranking [${i}]: "${a.title.substring(0, 50)}" → ${scopusRanking}`);
-      if (scopusRanking) {
-        ranking = scopusRanking;
-        console.log(
-          `[Scholarly] ✓ Scopus ranking [${i}]: "${a.title.substring(0, 50)}" → ${ranking.title} | ISSN: ${(ranking.issns || []).join(", ") || "N/A"} | SJR: ${ranking.sjr ?? "N/A"} (${ranking.sjrYear ?? "N/A"}) | SNIP: ${ranking.snip ?? "N/A"} (${ranking.snipYear ?? "N/A"})`,
-        );
-      } else {
-        console.log(
-          `[Scholarly] ✗ No Scopus ranking [${i}]: "${a.title.substring(0, 50)}"`,
-        );
+      // Create or find the container
+      let interactiveContainer = a.badgeContainer.querySelector(".scholarly-interactive-container") as HTMLElement | null;
+      if (!interactiveContainer) {
+        interactiveContainer = document.createElement("span");
+        interactiveContainer.className = "scholarly-interactive-container";
+        if (a.badgeContainer.tagName === "A") a.badgeContainer.insertAdjacentElement("afterend", interactiveContainer);
+        else a.badgeContainer.appendChild(interactiveContainer);
       }
+      // Clear to prevent duplication
+      interactiveContainer.innerHTML = "";
 
-      const article: Article = {
-        title: a.title,
-        link: a.link,
-        journal: a.journal,
-        year: a.year,
-        citations: a.citations,
-        ranking: scopusRanking ?? undefined,
-        scopusRanking: scopusRanking ?? undefined,
-        extra: {},
-      };
+      // 1. JR Bubble (Interactive — hover shows journal details)
+      const jrBubble = document.createElement("div");
+      jrBubble.className = "scholarly-interactive-bubble";
 
-      if (scopusRanking && shouldContinue()) {
+      const sjr = Number(ranking.sjr || 0);
+      const q = ranking.sjrBestQuartile || "";
+      const snip = Number(ranking.snip || 0);
 
-        console.log("Scoper ranking",scopusRanking);
-        const isOpenAccess =
-          String(scopusRanking.openAccess ?? scopusRanking.openaccess ?? "0") === "1";
+      const rows = [
+        ["Journal", ranking.title || "-"],
+        ["Publisher", ranking.publisher || "-"],
+        ["SJR", `${sjr.toFixed(3)} (${q || "-"})`],
+        ["SNIP", snip > 0 ? snip.toFixed(3) : "-"],
+        ["CiteScore", Number(ranking.citeScore || 0).toFixed(2)]
+      ];
+      const popHtml = rows.map(([l, v]) => `
+        <div class="scholarly-popover-row">
+          <span style="font-weight:600; color:#5f6368; font-size:12px;">${l}</span>
+          <span style="color:#202124; font-size:12px; text-align:right;">${v}</span>
+        </div>
+      `).join("");
 
-        const cardToggle = document.createElement("button");
-        cardToggle.type = "button";
-        cardToggle.textContent = "Ranking card";
-        cardToggle.className = "scholarly-badge";
-        cardToggle.style.cssText =
-          "margin-left:4px;padding:4px 12px;background:#ffffff;color:#0b7a75;border:1px solid #0b7a75;" +
-          "font-size:11px;border-radius:999px;font-weight:700;cursor:pointer;";
+      jrBubble.innerHTML = `
+        <div class="scholarly-badge-circle" style="background:#f1f3f4; color:#5f6368; border:1px solid #e1e4e8;">JR</div>
+        <div class="scholarly-bubble-popover">
+          <div style="font-size: 13px; font-weight:700; color:#1a73e8; margin-bottom:12px; border-bottom:1px solid #e8eaed; padding-bottom:8px;">Journal Ranking Details</div>
+          ${popHtml}
+          <div style="margin-top:10px; padding-top:8px; border-top:1px solid #e8eaed; font-size:10px; color:#70757a; text-align:center;">Powered by Scopus</div>
+        </div>
+      `;
+      interactiveContainer.appendChild(jrBubble);
 
-        let cardEl: HTMLElement | null = null;
-        cardToggle.addEventListener("click", (evt) => {
-          evt.preventDefault();
-          evt.stopPropagation();
-          if (cardEl && cardEl.isConnected) {
-            cardEl.remove();
-            cardEl = null;
-            return;
-          }
-          cardEl = buildRankingCard(scopusRanking);
-          a.badgeContainer.appendChild(cardEl);
-        });
-        a.badgeContainer.appendChild(cardToggle);
+      // 2. SJR Pill (Static)
+      let sjrColor = "#202124";
+      if (sjr > 4) sjrColor = "#1a73e8"; else if (sjr > 1) sjrColor = "#188038";
+      const sjrPill = document.createElement("span");
+      sjrPill.className = "scholarly-static-pill";
+      sjrPill.style.color = sjrColor;
+      sjrPill.textContent = `SJR ${sjr.toFixed(3)}`;
+      interactiveContainer.appendChild(sjrPill);
 
-        const openAccessBadge = document.createElement("span");
-        openAccessBadge.className = "scholarly-badge";
-        openAccessBadge.style.cssText =
-          "margin-left:4px;padding:2px 6px;background:" +
-          (isOpenAccess ? "#2e7d32" : "#6c757d") +
-          ";color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-        openAccessBadge.textContent = isOpenAccess
-          ? "Open Access: Yes"
-          : "Open Access: No";
-        a.badgeContainer.appendChild(openAccessBadge);
-
-        const badge = document.createElement("span");
-        badge.className = "scholarly-badge";
-        badge.style.cssText =
-          "margin-left:8px;padding:2px 6px;background:#1976d2;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
+      // 3. Quartile Tag (Static)
+      if (q) {
+        let qBg = "#f1f3f4", qCol = "#5f6368";
+        if (q === "Q1") { qBg = "#e6f4ea"; qCol = "#137333"; }
+        else if (q === "Q2") { qBg = "#fef7e0"; qCol = "#b06000"; }
+        else if (q === "Q3") { qBg = "#feefe3"; qCol = "#b06000"; }
+        else if (q === "Q4") { qBg = "#fce8e6"; qCol = "#a50e0e"; }
         
-        let sjrText = `SJR ${Number(scopusRanking.sjr || 0).toFixed(3)}`;
-        if (scopusRanking.sjrBestQuartile) {
-          sjrText += ` (${scopusRanking.sjrBestQuartile})`;
-        } else if (scopusRanking.sjrYear) {
-          sjrText += ` (${scopusRanking.sjrYear})`;
-        }
-        badge.textContent = sjrText;
-        a.badgeContainer.appendChild(badge);
-
-        // Add H-Index badge if available
-        if (scopusRanking.hIndex) {
-          const hIndexBadge = document.createElement("span");
-          hIndexBadge.className = "scholarly-badge";
-          hIndexBadge.style.cssText =
-            "margin-left:4px;padding:2px 6px;background:#3f51b5;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-          hIndexBadge.textContent = `H-Index ${scopusRanking.hIndex}`;
-          a.badgeContainer.appendChild(hIndexBadge);
-        }
-
-        if (typeof scopusRanking.snip === "number") {
-          const snipBadge = document.createElement("span");
-          snipBadge.className = "scholarly-badge";
-          snipBadge.style.cssText =
-            "margin-left:4px;padding:2px 6px;background:#8e24aa;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-          snipBadge.textContent = `SNIP ${scopusRanking.snip.toFixed(3)} (${scopusRanking.snipYear || "-"})`;
-          a.badgeContainer.appendChild(snipBadge);
-        }
-
-        // Add CiteScore badge if available
-        if (scopusRanking.citeScore) {
-          const citeScoreBadge = document.createElement("span");
-          citeScoreBadge.className = "scholarly-badge";
-          citeScoreBadge.style.cssText =
-            "margin-left:4px;padding:2px 6px;background:#4caf50;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-          citeScoreBadge.textContent = `CiteScore ${scopusRanking.citeScore.toFixed(2)} (${scopusRanking.citeScoreYear})`;
-          a.badgeContainer.appendChild(citeScoreBadge);
-        }
-
-        // Add citations count
-        if (a.citations) {
-          const citeBadge = document.createElement("span");
-          citeBadge.className = "scholarly-badge";
-          citeBadge.style.cssText =
-            "margin-left:4px;padding:2px 6px;background:#ff9800;color:#fff;font-size:11px;border-radius:3px;font-weight:bold;";
-          citeBadge.textContent = `Cited by ${a.citations}`;
-          a.badgeContainer.appendChild(citeBadge);
-        }
-
+        const qTag = document.createElement("span");
+        qTag.className = "scholarly-q-tag";
+        qTag.style.background = qBg;
+        qTag.style.color = qCol;
+        qTag.textContent = q;
+        interactiveContainer.appendChild(qTag);
       }
-
-      collected.push(article);
     });
-
-    const withScopus = collected.filter((a) => a.scopusRanking).length;
-    console.log(
-      `[Scholarly] Done: ${collected.length} articles, ${withScopus} with Scopus rankings`,
-    );
-    console.log("[Scholarly] Full data:", collected);
-  } catch (error) {
-    console.error("[Scholarly] Error during scraping:", error);
-  }
+  } catch (error) { console.error("[Scholarly] Error during scraping:", error); }
 }
 
-/**
- * Initialize the content script logic for Google Scholar.
- * It will react to storage changes and page loads.
- */
 function init(): void {
-  console.log("[Scholarly] Content script initialized");
-  console.log("[Scholarly] Current URL:", window.location.href);
-
-  // only run on scholar subdomain
-  if (!/scholar\.google\./i.test(window.location.hostname)) {
-    console.log("[Scholarly] Not on Google Scholar domain, exiting");
-    return;
-  }
-
-  console.log("[Scholarly] On Google Scholar domain, setting up listeners...");
-
+  if (!/scholar\.google\./i.test(window.location.hostname)) return;
   let runGeneration = 0;
-  const nextGeneration = (): number => {
-    runGeneration += 1;
-    return runGeneration;
-  };
-
-  // helper to decide whether to scrape now
   const maybeScrape = async (enabled: boolean): Promise<void> => {
-    console.log(`[Scholarly] maybeScrape called with enabled=${enabled}`);
     if (enabled) {
-      const currentGeneration = nextGeneration();
-      const shouldContinue = () => currentGeneration === runGeneration;
-      console.log("[Scholarly] Scraping is enabled, starting scrape...");
-      if (isGoogleScholarProfilePage()) {
-        await scrapeGoogleScholarProfile({ shouldContinue });
-      } else {
-        await scrapeArticles(shouldContinue);
-      }
+      const gen = ++runGeneration;
+      const shouldContinue = () => gen === runGeneration;
+      if (isGoogleScholarProfilePage()) await scrapeGoogleScholarProfile({ shouldContinue });
+      else await scrapeArticles(shouldContinue);
     } else {
-      nextGeneration();
-      console.log("[Scholarly] Scraping is disabled, clearing badges...");
+      runGeneration++;
       clearBadges();
       clearProfileBadges();
     }
   };
-
-  // Check initial state from storage
-  getGoogleScholarEnabled()
-    .then((enabled) => {
-      console.log(`[Scholarly] Initial enabled state: ${enabled}`);
-      return maybeScrape(enabled);
-    })
-    .catch((error) => {
-      console.error("[Scholarly] Error checking storage:", error);
-      // Fail-safe: default to enabled for first-time/edge environments.
-      maybeScrape(true).catch((scrapeError) => {
-        console.error("[Scholarly] Error during fallback scrape:", scrapeError);
-      });
-    });
-
-  // Listen for messages from the popup when toggle changes
-  if (chrome && chrome.runtime) {
-    console.log("[Scholarly] Setting up runtime message listener");
+  getGoogleScholarEnabled().then(maybeScrape).catch(e => { console.error(e); maybeScrape(true); });
+  if (chrome?.runtime) {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      console.log("[Scholarly] Received message:", message);
       if (message.type === "TOGGLE_CHANGED") {
-        console.log(`[Scholarly] Toggle changed to: ${message.enabled}`);
-        maybeScrape(Boolean(message.enabled))
-          .then(() => {
-            sendResponse({ received: true, success: true });
-          })
-          .catch((error) => {
-            console.error("[Scholarly] Error during scraping:", error);
-            sendResponse({ received: true, success: false, error });
-          });
-        return true; // Keep the channel open for async response
+        maybeScrape(Boolean(message.enabled)).then(() => sendResponse({ received: true, success: true }));
+        return true;
       }
       sendResponse({ received: true });
     });
-  } else {
-    console.error("[Scholarly] chrome.runtime not available");
   }
 }
 
