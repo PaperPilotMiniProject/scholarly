@@ -273,6 +273,129 @@ function injectScholarlyStyles() {
     .scholarly-popover-row:last-child {
       margin-bottom: 0 !important;
     }
+    .scholarly-profile-affiliation-container {
+      display: flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
+      margin-top: 6px !important;
+      margin-bottom: 10px !important;
+      gap: 12px !important;
+      position: relative !important;
+      z-index: 100 !important;
+    }
+    #gsc_prf, #gsc_prf_w, #gsc_prf_i, #gsc_prf_pbl, #gsc_prf_c {
+      overflow: visible !important;
+    }
+    .scholarly-profile-affiliation {
+      font-size: 13px !important;
+      color: #5f6368 !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 6px !important;
+      font-family: inherit !important;
+    }
+    .scholarly-aff-all-btn {
+      color: #1a73e8 !important;
+      font-size: 11px !important;
+      cursor: pointer !important;
+      text-decoration: none !important;
+      font-weight: 600 !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      border: 1px solid #dadce0 !important;
+      border-radius: 16px !important;
+      padding: 4px 10px !important;
+      transition: all 0.2s ease !important;
+      background: #fff !important;
+    }
+    .scholarly-aff-all-btn:hover {
+      background: #f8f9fa !important;
+      border-color: #1a73e8 !important;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important;
+    }
+    .scholarly-aff-window {
+      position: absolute !important;
+      background: #ffffff !important;
+      border: 1px solid #dadce0 !important;
+      border-radius: 10px !important;
+      padding: 0 !important;
+      box-shadow: 0 12px 48px rgba(0,0,0,0.2) !important;
+      z-index: 2147483647 !important;
+      width: 380px !important;
+      display: none;
+      opacity: 0;
+      transform: scale(0.95);
+      transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+      overflow: hidden !important;
+      font-family: system-ui, -apple-system, sans-serif !important;
+      top: 100% !important;
+      left: 0 !important;
+      margin-top: 8px !important;
+    }
+    .scholarly-aff-window.show {
+      display: block !important;
+      opacity: 1 !important;
+      transform: scale(1) !important;
+    }
+    .scholarly-aff-header {
+      background: #f8f9fa !important;
+      padding: 10px 14px !important;
+      border-bottom: 1px solid #eee !important;
+      cursor: grab !important;
+      display: flex !important;
+      justify-content: space-between !important;
+      align-items: center !important;
+      user-select: none !important;
+    }
+    .scholarly-aff-header:active {
+      cursor: grabbing !important;
+    }
+    .scholarly-aff-title {
+      font-weight: 700 !important;
+      font-size: 12px !important;
+      color: #202124 !important;
+      letter-spacing: 0.2px !important;
+    }
+    .scholarly-aff-close {
+      cursor: pointer !important;
+      color: #5f6368 !important;
+      font-size: 18px !important;
+      line-height: 1 !important;
+      padding: 4px !important;
+      border-radius: 4px !important;
+      transition: background 0.2s !important;
+    }
+    .scholarly-aff-close:hover {
+      background: #e8eaed !important;
+      color: #202124 !important;
+    }
+    .scholarly-aff-content {
+      max-height: 350px !important;
+      overflow-y: auto !important;
+      padding: 8px 14px 14px !important;
+    }
+    .scholarly-aff-item {
+      display: flex !important;
+      gap: 12px !important;
+      padding: 10px 0 !important;
+      border-bottom: 1px solid #f1f3f4 !important;
+    }
+    .scholarly-aff-item:last-child {
+      border-bottom: none !important;
+    }
+    .scholarly-aff-year {
+      font-weight: 700 !important;
+      color: #1a73e8 !important;
+      font-size: 11px !important;
+      min-width: 34px !important;
+      padding-top: 1px !important;
+    }
+    .scholarly-aff-name {
+      font-size: 12px !important;
+      color: #444 !important;
+      line-height: 1.5 !important;
+      flex: 1 !important;
+    }
   `;
   document.head.appendChild(style);
   document.getElementById(POSITION_PANEL_ID)?.remove();
@@ -449,10 +572,11 @@ export async function scrapeGoogleScholarProfile(options?: { shouldContinue?: ()
 
   if (!shouldContinue()) return;
 
-  // Extract profile affiliation
-  let profileAffiliation = "";
-  for (const res of abstractResults) {
-    if (!res) continue;
+  // Extract all profile affiliations
+  const affiliationsMap = new Map<string, number>();
+  abstractResults.forEach((res, index) => {
+    if (!res) return;
+    const articleYear = parseInt(articles[index].year) || 0;
     let authorGroups = res.authorGroup;
     if (authorGroups) {
       if (!Array.isArray(authorGroups)) authorGroups = [authorGroups];
@@ -469,22 +593,124 @@ export async function scrapeGoogleScholarProfile(options?: { shouldContinue?: ()
           let affs = Array.isArray(group.affiliation) ? group.affiliation : [group.affiliation];
           for (const sAff of affs) {
             let text = sAff?.["ce:source-text"] || sAff?.["ce:text"] || sAff?.["afdispname"] || "";
-            if (text) { profileAffiliation = text; break; }
+            if (text) {
+              const currentYear = affiliationsMap.get(text) || 0;
+              if (articleYear > currentYear) {
+                affiliationsMap.set(text, articleYear);
+              }
+            }
           }
         }
       }
     }
-    if (profileAffiliation) break;
-  }
+  });
 
-  if (profileAffiliation && shouldContinue()) {
+  const sortedAffiliations = Array.from(affiliationsMap.entries())
+    .map(([text, year]) => ({ text, year }))
+    .sort((a, b) => b.year - a.year);
+
+  if (sortedAffiliations.length > 0 && shouldContinue()) {
     const nameEl = document.getElementById("gsc_prf_in");
     if (nameEl?.parentElement) {
-      const affEl = document.createElement("div");
-      affEl.className = "scholarly-profile-affiliation";
-      affEl.style.cssText = "font-size:14px; color:#4d5156; margin:8px 0; display:flex; align-items:center; gap:6px;";
-      affEl.innerHTML = `<span style="font-size:16px;">🏛️</span> <span>${profileAffiliation}</span>`;
-      nameEl.insertAdjacentElement("afterend", affEl);
+      const container = document.createElement("div");
+      container.className = "scholarly-profile-affiliation-container";
+      
+      const latest = sortedAffiliations[0];
+      const otherAffsHtml = sortedAffiliations.map(a => `
+        <div class="scholarly-aff-item">
+          <span class="scholarly-aff-year">${a.year || "N/A"}</span>
+          <span class="scholarly-aff-name">${a.text}</span>
+        </div>
+      `).join("");
+
+      container.innerHTML = `
+        <div class="scholarly-profile-affiliation">
+          <span style="font-size:16px;">🏛️</span>
+          <span>${latest.text} ${latest.year ? `(${latest.year})` : ""}</span>
+          ${sortedAffiliations.length > 1 ? `
+            <a class="scholarly-aff-all-btn" id="scholarly-show-all-affs">
+              View History (${sortedAffiliations.length}) ▾
+            </a>
+          ` : ""}
+        </div>
+        <div class="scholarly-aff-window" id="scholarly-aff-window">
+          <div class="scholarly-aff-header" id="scholarly-aff-handle">
+            <span class="scholarly-aff-title">AFFILIATION HISTORY</span>
+            <span class="scholarly-aff-close" id="scholarly-aff-close">&times;</span>
+          </div>
+          <div class="scholarly-aff-content">
+            ${otherAffsHtml}
+          </div>
+        </div>
+      `;
+
+      nameEl.insertAdjacentElement("afterend", container);
+
+      const btn = container.querySelector("#scholarly-show-all-affs") as HTMLElement;
+      const window = container.querySelector("#scholarly-aff-window") as HTMLElement;
+      const closeBtn = container.querySelector("#scholarly-aff-close") as HTMLElement;
+      const handle = container.querySelector("#scholarly-aff-handle") as HTMLElement;
+
+      if (btn && window) {
+        btn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const isShowing = window.classList.contains("show");
+          if (isShowing) {
+            window.classList.remove("show");
+          } else {
+            // Reset to default position if not dragged before
+            if (!window.dataset.dragged) {
+              window.style.left = "0";
+              window.style.top = "100%";
+            }
+            window.classList.add("show");
+          }
+        };
+
+        if (closeBtn) {
+          closeBtn.onclick = (e) => {
+            e.stopPropagation();
+            window.classList.remove("show");
+          };
+        }
+
+        // Draggable Logic
+        let isDragging = false;
+        let startX: number, startY: number, initialLeft: number, initialTop: number;
+
+        handle.onmousedown = (e) => {
+          isDragging = true;
+          startX = e.clientX;
+          startY = e.clientY;
+          
+          const style = getComputedStyle(window);
+          initialLeft = parseInt(style.left) || 0;
+          initialTop = parseInt(style.top) || 0;
+          
+          handle.style.cursor = "grabbing";
+          window.dataset.dragged = "true";
+          e.preventDefault();
+          e.stopPropagation();
+        };
+
+        document.addEventListener("mousemove", (e) => {
+          if (!isDragging) return;
+          const dx = e.clientX - startX;
+          const dy = e.clientY - startY;
+          window.style.transition = "none"; 
+          window.style.left = `${initialLeft + dx}px`;
+          window.style.top = `${initialTop + dy}px`;
+        });
+
+        document.addEventListener("mouseup", () => {
+          if (isDragging) {
+            isDragging = false;
+            handle.style.cursor = "grab";
+            window.style.transition = ""; 
+          }
+        });
+      }
     }
   }
 
