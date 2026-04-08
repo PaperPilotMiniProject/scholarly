@@ -1,8 +1,8 @@
 {
-  "name": "wxt-react-starter",
-  "description": "manifest.json description",
+  "name": "scholarly",
+  "description": "An advanced academic research companion that augments Google Scholar, Scopus, and ORCID with real-time journal metrics (SJR, SNIP, CiteScore), author position analytics, and comprehensive historical affiliation trends through a seamless, interactive UI.",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
