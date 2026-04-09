@@ -5,6 +5,7 @@ type LocalSjrData = {
   hIndex: string;
   sjrBestQuartile: string;
   title: string;
+  sjr?: string;
 };
 
 let localSjrMap: Map<string, LocalSjrData> | null = null;
@@ -47,25 +48,36 @@ if (chrome && chrome.runtime) {
       }
 
       // Get API credentials from chrome storage
-      chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
+      chrome.storage.local.get(["scopusApiKey", "scopusInstToken", "useScopusApi"], (items) => {
         const apiKey = (items.scopusApiKey || "") as string;
         const instToken = (items.scopusInstToken || "") as string;
-
-        if (!apiKey) {
-          console.error("[Scholarly BG] Scopus API key not configured");
-          sendResponse({
-            success: false,
-            error:
-              "Scopus API key not configured. Please configure it in extension settings.",
-          });
-          return;
-        }
+        const useScopusApi = items.useScopusApi !== false;
 
         const digitsOnlyIssn = issn.replace(/-/g, "");
         const hyphenatedIssn =
           digitsOnlyIssn.length === 8
             ? `${digitsOnlyIssn.slice(0, 4)}-${digitsOnlyIssn.slice(4)}`
             : issn;
+
+        const candidates = [hyphenatedIssn, digitsOnlyIssn].filter(Boolean);
+
+        const tryFallback = async () => {
+          const fallbackRanking = await fetchLocalSjrRanking(candidates);
+          if (fallbackRanking) {
+            sendResponse({ success: true, ranking: fallbackRanking });
+          } else {
+            sendResponse({
+              success: false,
+              error: `ISSN not found locally or via Scopus for candidates: ${candidates.join(", ")}`,
+            });
+          }
+        };
+
+        if (!apiKey || !useScopusApi) {
+          console.warn("[Scholarly BG] Scopus API disabled or key not configured. Falling back to local data.");
+          tryFallback();
+          return;
+        }
 
         const baseUrl = "https://api.elsevier.com/content/serial/title/issn";
         const params = new URLSearchParams({
@@ -76,8 +88,6 @@ if (chrome && chrome.runtime) {
         if (instToken) {
           params.append("insttoken", instToken);
         }
-
-        const candidates = [hyphenatedIssn, digitsOnlyIssn].filter(Boolean);
 
         const tryFetch = async () => {
           for (const candidateIssn of candidates) {
@@ -121,10 +131,7 @@ if (chrome && chrome.runtime) {
             }
           }
 
-          sendResponse({
-            success: false,
-            error: `ISSN not found in Scopus for candidates: ${candidates.join(", ")}`,
-          });
+          tryFallback();
         };
 
         tryFetch();
@@ -145,18 +152,19 @@ if (chrome && chrome.runtime) {
         return;
       }
 
-      chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
+      chrome.storage.local.get(["scopusApiKey", "scopusInstToken", "useScopusApi"], (items) => {
         const apiKey = (items.scopusApiKey || "") as string;
         const instToken = (items.scopusInstToken || "") as string;
+        const useScopusApi = items.useScopusApi !== false;
 
-        if (!apiKey) {
-          sendResponse({
-            success: false,
-            error:
-              "Scopus API key not configured. Please configure it in extension settings.",
-          });
-          return;
-        }
+        const tryFallback = async (candidates: string[]) => {
+          const fallbackRanking = await fetchLocalSjrRanking(candidates, doi);
+          if (fallbackRanking) {
+            sendResponse({ success: true, ranking: fallbackRanking });
+          } else {
+            sendResponse({ success: false, error: "No Scopus ranking found locally or via API." });
+          }
+        };
 
         fetch(`https://api.crossref.org/works/${encodeURIComponent(doi)}`)
           .then((r) => r.json())
@@ -175,7 +183,6 @@ if (chrome && chrome.runtime) {
               params.append("insttoken", instToken);
             }
 
-            const baseUrl = "https://api.elsevier.com/content/serial/title/issn";
             let candidates: string[] = [];
             
             issns.forEach(issn => {
@@ -186,6 +193,13 @@ if (chrome && chrome.runtime) {
             });
             candidates = [...new Set(candidates)];
 
+            if (!apiKey || !useScopusApi) {
+              console.warn("[Scholarly BG] Scopus API disabled or key not configured. Falling back to local data.");
+              tryFallback(candidates);
+              return;
+            }
+
+            const baseUrl = "https://api.elsevier.com/content/serial/title/issn";
             for (const candidateIssn of candidates) {
               const url = `${baseUrl}/${candidateIssn}?${params.toString()}`;
               try {
@@ -210,7 +224,7 @@ if (chrome && chrome.runtime) {
               }
             }
 
-            sendResponse({ success: false, error: "No Scopus ranking found for derived ISSNs." });
+            tryFallback(candidates);
           })
           .catch((err) => {
             sendResponse({ success: false, error: `CrossRef error: ${err.message}` });
@@ -231,15 +245,16 @@ if (chrome && chrome.runtime) {
         return;
       }
 
-      chrome.storage.local.get(["scopusApiKey", "scopusInstToken"], (items) => {
+      chrome.storage.local.get(["scopusApiKey", "scopusInstToken", "useScopusApi"], (items) => {
         const apiKey = (items.scopusApiKey || "") as string;
         const instToken = (items.scopusInstToken || "") as string;
+        const useScopusApi = items.useScopusApi !== false;
 
-        if (!apiKey) {
+        if (!apiKey || !useScopusApi) {
           sendResponse({
             success: false,
             error:
-              "Scopus API key not configured. Please configure it in extension settings.",
+              "Scopus API is disabled or key is not configured.",
           });
           return;
         }
@@ -409,11 +424,14 @@ async function loadLocalSjrData(): Promise<Map<string, LocalSjrData>> {
 
     const map = new Map<string, LocalSjrData>();
     for (const entry of data) {
+      const rawSjrStr = entry["SJR"] ? entry["SJR"].replace(",", ".") : undefined;
+      const rawSjr = rawSjrStr && !isNaN(parseFloat(rawSjrStr)) ? rawSjrStr : undefined;
       const sjrEntry: LocalSjrData = {
         rank: entry["Rank"],
         hIndex: entry["H index"],
         sjrBestQuartile: entry["SJR Best Quartile"],
         title: entry["Title"],
+        sjr: rawSjr,
       };
 
       const issns = (entry["Issn"] || "").split(",").map((s: string) => s.trim());
@@ -461,11 +479,42 @@ async function augmentWithLocalSjr(ranking: any): Promise<any> {
       ranking.sjrBestQuartile = localData.sjrBestQuartile;
       ranking.hIndex = localData.hIndex;
       ranking.localRank = localData.rank;
+      if (!ranking.sjr && localData.sjr) {
+        ranking.sjr = parseFloat(localData.sjr);
+        ranking.sjrYear = 2024;
+      }
       break;
     }
   }
 
   return ranking;
+}
+
+/**
+ * Looks up ranking data purely from the local SCImago dataset.
+ */
+async function fetchLocalSjrRanking(candidates: string[], doi?: string): Promise<any | null> {
+  const map = await loadLocalSjrData();
+  for (const issn of candidates) {
+    const normalized = normalizeIssn(issn);
+    const localData = map.get(normalized);
+    if (localData) {
+      console.log(`[Scholarly BG] Local SJR fallback match found for ISSN ${issn}: ${localData.title}`);
+      return {
+        title: localData.title,
+        issn: issn,
+        issns: [issn],
+        sjrBestQuartile: localData.sjrBestQuartile,
+        hIndex: localData.hIndex,
+        localRank: localData.rank,
+        sjr: localData.sjr ? parseFloat(localData.sjr) : null,
+        sjrYear: 2024,
+        doi: doi || null,
+        source: "local"
+      };
+    }
+  }
+  return null;
 }
 
 export {};
