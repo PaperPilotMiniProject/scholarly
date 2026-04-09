@@ -135,6 +135,7 @@ export function clearProfileBadges(): void {
   document.querySelectorAll(".scholarly-q-tag").forEach((el) => el.remove());
   document.querySelectorAll(".scholarly-pos-circle").forEach((el) => el.remove());
   document.getElementById(POSITION_PANEL_ID)?.remove();
+  document.getElementById("scholarly-aff-loading")?.remove();
 }
 
 function injectScholarlyStyles() {
@@ -396,6 +397,32 @@ function injectScholarlyStyles() {
       line-height: 1.5 !important;
       flex: 1 !important;
     }
+    @keyframes scholarly-spin {
+      to { transform: rotate(360deg); }
+    }
+    .scholarly-loading-spinner {
+      display: inline-block !important;
+      width: 12px !important;
+      height: 12px !important;
+      border: 2px solid #e0e0e0 !important;
+      border-top-color: #1a73e8 !important;
+      border-radius: 50% !important;
+      animation: scholarly-spin 0.7s linear infinite !important;
+      vertical-align: middle !important;
+      flex-shrink: 0 !important;
+    }
+    .scholarly-aff-loading {
+      display: inline-flex !important;
+      align-items: center !important;
+      gap: 6px !important;
+      font-size: 12px !important;
+      color: #5f6368 !important;
+      padding: 4px 10px !important;
+      border: 1px solid #dadce0 !important;
+      border-radius: 16px !important;
+      background: #fff !important;
+      font-family: inherit !important;
+    }
   `;
   document.head.appendChild(style);
   document.getElementById(POSITION_PANEL_ID)?.remove();
@@ -526,6 +553,7 @@ export async function scrapeGoogleScholarProfile(options?: { shouldContinue?: ()
         interactiveContainer.className = "scholarly-interactive-container";
         titleLink.insertAdjacentElement("afterend", interactiveContainer);
       }
+      interactiveContainer.innerHTML = '<span class="scholarly-loading-spinner"></span>';
       const title = titleLink.innerText.trim();
       const grayTexts = titleCell.querySelectorAll(".gs_gray");
       const authors = grayTexts.length > 0 ? (grayTexts[0] as HTMLElement).innerText.trim() : "";
@@ -556,18 +584,33 @@ export async function scrapeGoogleScholarProfile(options?: { shouldContinue?: ()
     injectPositionPanel(counts);
   }
 
+  // Inject affiliation loading placeholder
+  {
+    const nameElEarly = document.getElementById("gsc_prf_in");
+    if (nameElEarly) {
+      document.getElementById("scholarly-aff-loading")?.remove();
+      const loadingEl = document.createElement("div");
+      loadingEl.id = "scholarly-aff-loading";
+      loadingEl.className = "scholarly-profile-affiliation-container";
+      loadingEl.innerHTML = `<div class="scholarly-aff-loading"><span class="scholarly-loading-spinner"></span><span>Fetching affiliations…</span></div>`;
+      nameElEarly.insertAdjacentElement("afterend", loadingEl);
+    }
+  }
+
   // Resolve DOIs
-  await runWithConcurrency(articles, 4, async (article) => {
+  await runWithConcurrency(articles, 6, async (article) => {
     if (shouldContinue()) article.doi = await resolveProfileArticleDoiWithCrossref(article);
   });
 
-  // Fetch rankings and abstracts
+  // Fetch rankings and abstracts — run both in parallel per article
   const scopusResults: any[] = new Array(articles.length).fill(null);
   const abstractResults: any[] = new Array(articles.length).fill(null);
-  await runWithConcurrency(articles, 2, async (article, index) => {
+  await runWithConcurrency(articles, 4, async (article, index) => {
     if (!shouldContinue() || !article.doi) return;
-    scopusResults[index] = await getScopusRankingByDoi(article.doi);
-    abstractResults[index] = await getScopusAbstractByDoi(article.doi);
+    [scopusResults[index], abstractResults[index]] = await Promise.all([
+      getScopusRankingByDoi(article.doi),
+      getScopusAbstractByDoi(article.doi),
+    ]);
   });
 
   if (!shouldContinue()) return;
@@ -609,6 +652,7 @@ export async function scrapeGoogleScholarProfile(options?: { shouldContinue?: ()
     .map(([text, year]) => ({ text, year }))
     .sort((a, b) => b.year - a.year);
 
+  document.getElementById("scholarly-aff-loading")?.remove();
   if (sortedAffiliations.length > 0 && shouldContinue()) {
     const nameEl = document.getElementById("gsc_prf_in");
     if (nameEl?.parentElement) {
