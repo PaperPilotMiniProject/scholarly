@@ -1,27 +1,12 @@
 import "../src/background/rankings";
 import { fetchS2Stats } from "../src/services/semanticScholar";
 
-const SCOPUS_API_KEY = import.meta.env.VITE_SCOPUS_API_KEY ?? "";
-const SCOPUS_INST_TOKEN = import.meta.env.VITE_SCOPUS_INST_TOKEN ?? "";
 // Fallback to hardcoded keys in case the .env file changes haven't been picked up by a dev server restart
 const ORCID_CLIENT_ID = import.meta.env.VITE_ORCHID_CLIENT_ID || "APP-GBZCZMUMX86J3PEK";
 const ORCID_CLIENT_SECRET = import.meta.env.VITE_ORCHID_CLIENT_SECRET || "7826f25a-54e8-48a6-b99a-ca0299b0df68";
 
 export default defineBackground(() => {
   console.log("[Scholarly] Background service worker initialized");
-
-  // Seed Scopus API key from build-time env vars into storage on first run.
-  // This means users don't have to manually enter it in the popup.
-  // If the user has already saved a key via the popup, keep theirs.
-  chrome.storage.local.get(["scopusApiKey"], (items) => {
-    if (!items.scopusApiKey && SCOPUS_API_KEY) {
-      chrome.storage.local.set({
-        scopusApiKey: SCOPUS_API_KEY,
-        scopusInstToken: SCOPUS_INST_TOKEN,
-      });
-      console.log("[Scholarly] Seeded Scopus API key from build config");
-    }
-  });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Proxy ORCID API GET requests to avoid CORS from content script

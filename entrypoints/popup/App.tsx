@@ -130,6 +130,16 @@ function App() {
     const newVal = e.target.checked;
     setUseScopusApi(newVal);
     setConfig({ useScopusApi: newVal });
+
+    if (chrome && chrome.tabs) {
+      chrome.tabs.query({ url: "*://*.google.com/*" }, (tabs) => {
+        tabs.forEach((tab) => {
+          if (tab.id) {
+            chrome.tabs.reload(tab.id);
+          }
+        });
+      });
+    }
   };
 
   return (
@@ -206,13 +216,25 @@ function App() {
                     />
                   </div>
 
-                  <div className="form-group">
+                  <div className="form-group" style={{ display: "flex", gap: "10px" }}>
                     <button
                       onClick={handleSaveScpusSettings}
                       disabled={validating}
                       className="save-btn"
+                      style={{ flex: 1 }}
                     >
                       {validating ? "Validating..." : "Save & Validate"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setScopusApiKey("");
+                        setScopusInstToken("");
+                        setConfig({ scopusApiKey: "", scopusInstToken: "" });
+                      }}
+                      className="save-btn"
+                      style={{ backgroundColor: "#e74c3c", flex: 1 }}
+                    >
+                      Delete Key
                     </button>
                   </div>
 
