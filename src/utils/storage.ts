@@ -92,3 +92,47 @@ export function getGoogleScholarEnabled(): Promise<boolean> {
     }
   });
 }
+
+/**
+ * Persist the enabled state of the ORCID scraper.
+ */
+export function setOrcidEnabled(enabled: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    if (chrome && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ orcidEnabled: enabled }, () => {
+        resolve();
+      });
+    } else {
+      try {
+        localStorage.setItem("orcidEnabled", JSON.stringify(enabled));
+      } catch (e) {}
+      resolve();
+    }
+  });
+}
+
+/**
+ * Retrieve the saved state of the ORCID scraper.
+ */
+export function getOrcidEnabled(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (chrome && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(["orcidEnabled"], (result) => {
+        const enabled = result.orcidEnabled;
+        resolve(enabled === undefined ? true : Boolean(enabled));
+      });
+    } else {
+      try {
+        const stored = localStorage.getItem("orcidEnabled");
+        if (stored === null) {
+          resolve(true);
+          return;
+        }
+        const val = JSON.parse(stored);
+        resolve(Boolean(val));
+      } catch (e) {
+        resolve(true);
+      }
+    }
+  });
+}

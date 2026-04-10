@@ -2,7 +2,7 @@
   "name": "scholarly",
   "description": "An advanced academic research companion that augments Google Scholar, Scopus, and ORCID with real-time journal metrics (SJR, SNIP, CiteScore), author position analytics, and comprehensive historical affiliation trends through a seamless, interactive UI.",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "scripts": {
     "dev": "wxt",
