@@ -1,6 +1,6 @@
 import { scrapeOrcidProfile } from "@/portals/orchid/scraper";
 import { clearOrcidBadges } from "@/portals/orchid/profileInjector";
-import { getGoogleScholarEnabled } from "@/utils/storage";
+import { getOrcidEnabled } from "@/utils/storage";
 import { extractOrcidId } from "@/portals/orchid/orcidApiClient";
 
 export default defineContentScript({
@@ -36,13 +36,13 @@ export default defineContentScript({
     };
 
     // Read initial enabled state
-    getGoogleScholarEnabled()
+    getOrcidEnabled()
       .then((enabled: boolean) => maybeScrape(enabled))
       .catch(() => maybeScrape(true)); // fail-safe: run anyway
 
     // Listen for popup toggle messages
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (message.type === "TOGGLE_CHANGED") {
+      if (message.type === "TOGGLE_ORCID_CHANGED") {
         maybeScrape(Boolean(message.enabled))
           .then(() => sendResponse({ received: true, success: true }))
           .catch((err) => sendResponse({ received: true, success: false, error: err }));

@@ -14,7 +14,19 @@ export async function getConfig() {
       useScopusApi: true,
     };
     if (typeof chrome === "undefined" || !chrome.storage?.local) {
-      resolve(defaults);
+      try {
+        const storedKey = localStorage.getItem("scopusApiKey") || "";
+        const storedToken = localStorage.getItem("scopusInstToken") || "";
+        const storedUseApi = localStorage.getItem("useScopusApi");
+        
+        resolve({
+          scopusApiKey: storedKey,
+          scopusInstToken: storedToken,
+          useScopusApi: storedUseApi !== null ? JSON.parse(storedUseApi) : true,
+        });
+      } catch (e) {
+        resolve(defaults);
+      }
       return;
     }
     chrome.storage.local.get(
@@ -40,7 +52,12 @@ export async function setConfig(config: {
 }) {
   return new Promise((resolve) => {
     if (typeof chrome === "undefined" || !chrome.storage?.local) {
-      resolve(false);
+      try {
+        if (config.scopusApiKey !== undefined) localStorage.setItem("scopusApiKey", config.scopusApiKey);
+        if (config.scopusInstToken !== undefined) localStorage.setItem("scopusInstToken", config.scopusInstToken);
+        if (config.useScopusApi !== undefined) localStorage.setItem("useScopusApi", JSON.stringify(config.useScopusApi));
+      } catch (e) {}
+      resolve(true);
       return;
     }
     chrome.storage.local.set(config, () => {
@@ -116,7 +133,11 @@ export async function validateScopusCredentials(
 export async function clearConfig() {
   return new Promise((resolve) => {
     if (typeof chrome === "undefined" || !chrome.storage?.local) {
-      resolve(false);
+      try {
+        localStorage.removeItem("scopusApiKey");
+        localStorage.removeItem("scopusInstToken");
+      } catch (e) {}
+      resolve(true);
       return;
     }
     chrome.storage.local.remove(["scopusApiKey", "scopusInstToken"], () => {
