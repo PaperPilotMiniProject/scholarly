@@ -20,6 +20,7 @@ const BADGE_CLASS = "scholarly-badge";
 const BADGE_ANCHOR_CLASS = "scholarly-badge-anchor";
 const STATS_PANEL_ID = "scholarly-orcid-stats";
 const ORCID_STYLES_ID = "scholarly-orcid-styles";
+const TOAST_ID = "scholarly-orcid-toast";
 
 let injectionInterval: number | null = null;
 
@@ -194,6 +195,140 @@ function injectOrcidStyles(): void {
 
 // ─── Clear ────────────────────────────────────────────────────────────────────
 
+// ─── Toast notification ───────────────────────────────────────────────────────
+
+const TOAST_STATES = {
+  loading: {
+    icon: "⏳",
+    bg: "#202124",
+    title: "Scholarly is loading…",
+    sub: "Fetching journal rankings for this ORCID profile.",
+    showReload: false,
+  },
+  success: {
+    icon: "✅",
+    bg: "#137333",
+    title: "Scholarly metrics injected",
+    sub: "",
+    showReload: false,
+  },
+  needsReload: {
+    icon: "🔄",
+    bg: "#202124",
+    title: "Scholarly needs a reload",
+    sub: "The ORCID page loaded before Scholarly could initialise. Reload to see metrics.",
+    showReload: true,
+  },
+} as const;
+
+type ToastState = keyof typeof TOAST_STATES;
+
+/** Injects the slide-in/out keyframes into the page once. */
+function ensureToastKeyframes(): void {
+  if (document.getElementById("scholarly-toast-keyframes")) return;
+  const kf = document.createElement("style");
+  kf.id = "scholarly-toast-keyframes";
+  kf.textContent = `
+    @keyframes scholarly-slide-in {
+      from { opacity: 0; transform: translateY(20px) scale(0.95); }
+      to   { opacity: 1; transform: translateY(0)   scale(1); }
+    }
+    @keyframes scholarly-slide-out {
+      from { opacity: 1; transform: translateY(0)   scale(1); }
+      to   { opacity: 0; transform: translateY(16px) scale(0.95); }
+    }
+  `;
+  document.head.appendChild(kf);
+}
+
+/**
+ * Creates or updates the Scholarly toast notification.
+ * state = "loading"    → dark pill with spinner text (immediate feedback)
+ * state = "success"    → green pill, auto-dismisses after 2.5 s
+ * state = "needsReload" → dark pill with Reload button
+ */
+function setToastState(state: ToastState): void {
+  ensureToastKeyframes();
+
+  const cfg = TOAST_STATES[state];
+  let toast = document.getElementById(TOAST_ID) as HTMLElement | null;
+
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = TOAST_ID;
+    document.body.appendChild(toast);
+  }
+
+  toast.style.cssText = `
+    position: fixed !important;
+    bottom: 24px !important;
+    right: 24px !important;
+    z-index: 2147483647 !important;
+    background: ${cfg.bg} !important;
+    color: #fff !important;
+    border-radius: 12px !important;
+    padding: 14px 18px !important;
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, system-ui, sans-serif !important;
+    font-size: 13px !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35) !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    max-width: 340px !important;
+    animation: scholarly-slide-in 0.3s cubic-bezier(0.34,1.56,0.64,1) !important;
+    pointer-events: auto !important;
+    transition: background 0.3s ease !important;
+  `;
+
+  toast.innerHTML = `
+    <span style="font-size:22px;flex-shrink:0;">${cfg.icon}</span>
+    <div style="flex:1;">
+      <div style="font-weight:700;margin-bottom:${cfg.sub ? "3px" : "0"};">${cfg.title}</div>
+      ${cfg.sub ? `<div style="font-size:11px;opacity:0.75;">${cfg.sub}</div>` : ""}
+    </div>
+    ${cfg.showReload ? `
+      <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;">
+        <button id="scholarly-reload-btn" style="
+          background:#1a73e8;color:#fff;border:none;border-radius:7px;
+          padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;
+          font-family:inherit;
+        ">Reload</button>
+        <button id="scholarly-dismiss-btn" style="
+          background:transparent;color:rgba(255,255,255,0.6);border:none;
+          font-size:11px;cursor:pointer;font-family:inherit;padding:2px 0;
+        ">Dismiss</button>
+      </div>
+    ` : `
+      <button id="scholarly-dismiss-btn" style="
+        background:transparent;color:rgba(255,255,255,0.5);border:none;
+        font-size:18px;line-height:1;cursor:pointer;font-family:inherit;padding:0 2px;
+        flex-shrink:0;
+      ">×</button>
+    `}
+  `;
+
+  document.getElementById("scholarly-reload-btn")?.addEventListener("click", () => {
+    window.location.reload();
+  });
+  document.getElementById("scholarly-dismiss-btn")?.addEventListener("click", () => {
+    dismissToast();
+  });
+
+  // Auto-dismiss success after 2.5 s
+  if (state === "success") {
+    setTimeout(() => dismissToast(), 2500);
+  }
+}
+
+/** Slides the toast out and removes it. */
+function dismissToast(immediate = false): void {
+  const existing = document.getElementById(TOAST_ID);
+  if (!existing) return;
+  if (immediate) { existing.remove(); return; }
+  existing.style.animation = "scholarly-slide-out 0.25s ease forwards";
+  setTimeout(() => existing.remove(), 260);
+}
+
 /**
  * Removes all badges and the stats panel injected by Scholarly.
  */
@@ -206,6 +341,7 @@ export function clearOrcidBadges(): void {
   document.querySelectorAll(`.${BADGE_ANCHOR_CLASS}`).forEach((el) => el.remove());
   document.getElementById(STATS_PANEL_ID)?.remove();
   document.getElementById(ORCID_STYLES_ID)?.remove();
+  dismissToast(true);
   console.log("[Scholarly][ORCID] Badges and stats panel cleared");
 }
 
@@ -611,8 +747,8 @@ function buildYearChart(byYear: Record<string, number>): string {
  * author-position pills matching the GS profile panel, a white-card
  * bar chart, and a clean ranked journal table.
  */
-function injectStatsPanel(stats: StatsData): void {
-  if (stats.totalWorks === 0) return;
+function injectStatsPanel(stats: StatsData): boolean {
+  if (stats.totalWorks === 0) return false;
 
   const worksSection =
     document.querySelector("#orcid-works") ??
@@ -621,7 +757,7 @@ function injectStatsPanel(stats: StatsData): void {
 
   if (!worksSection) {
     console.warn("[Scholarly][ORCID] Could not find works section for stats panel");
-    return;
+    return false;
   }
 
   document.getElementById(STATS_PANEL_ID)?.remove();
@@ -804,13 +940,19 @@ function injectStatsPanel(stats: StatsData): void {
 
   worksSection.insertAdjacentElement("beforebegin", panel);
   console.log("[Scholarly][ORCID] Stats panel injected");
+  return true;
 }
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
 
 /**
  * Main entry point called by scraper.ts after data is ready.
- * Injects styles, stats panel, and per-article badges.
+ *
+ * Toast UX:
+ *  1. Shows a "loading" toast immediately so users know Scholarly is working.
+ *  2. Upgrades to "success" (auto-dismiss) when badges are first injected.
+ *  3. Falls back to "needsReload" if nothing injects after 3 polling rounds,
+ *     giving the user a direct Reload button.
  */
 export const injectOrcidBadges = (articles: OrcidArticle[], ownerName: string | null): void => {
   console.log(
@@ -819,12 +961,18 @@ export const injectOrcidBadges = (articles: OrcidArticle[], ownerName: string | 
 
   injectOrcidStyles();
 
+  // Show loading toast immediately — always visible feedback
+  setToastState("loading");
+
   const stats = computeStats(articles, ownerName);
   injectStatsPanel(stats);
 
   if (injectionInterval) {
     window.clearInterval(injectionInterval);
   }
+
+  let successToastShown = false;
+  let failedRounds = 0;
 
   const attemptInjection = () => {
     let injectedThisRound = 0;
@@ -838,6 +986,18 @@ export const injectOrcidBadges = (articles: OrcidArticle[], ownerName: string | 
 
     if (injectedThisRound > 0) {
       console.log(`[Scholarly][ORCID] Injected badges for ${injectedThisRound} articles this round`);
+      failedRounds = 0;
+
+      if (!successToastShown) {
+        successToastShown = true;
+        setToastState("success");
+      }
+    } else if (!successToastShown) {
+      failedRounds += 1;
+      // After 3 failed rounds (~6 s), Angular probably won't render — prompt reload
+      if (failedRounds >= 3) {
+        setToastState("needsReload");
+      }
     }
   };
 
