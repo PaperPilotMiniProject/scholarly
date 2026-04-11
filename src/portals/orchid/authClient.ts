@@ -74,6 +74,7 @@ export interface OrcidTokenResponse {
 /**
  * Reads a stored token from chrome.storage.local.
  * Returns null if not present or already expired.
+ * Avoid unnecessary API calls (use cached token)
  */
 async function readStoredToken(tier: TokenTier): Promise<StoredToken | null> {
   const tokenKey =
@@ -86,9 +87,10 @@ async function readStoredToken(tier: TokenTier): Promise<StoredToken | null> {
   const accessToken = stored[tokenKey] as string | undefined;
   const expiresAt = stored[expiryKey] as number | undefined;
 
+  // If token is not present then return null
   if (!accessToken || !expiresAt) return null;
 
-  // Treat as expired if within the buffer window
+  // If token is expired then simply return null
   if (Date.now() >= expiresAt - EXPIRY_BUFFER_MS) {
     console.log(`[OrcidAuth] Cached ${tier} token expired or about to expire`);
     return null;
@@ -98,7 +100,7 @@ async function readStoredToken(tier: TokenTier): Promise<StoredToken | null> {
 }
 
 /**
- * Persists a token response to chrome.storage.local.
+ * Updates old token and exp in storage with new token and expiry
  */
 async function writeStoredToken(
   tier: TokenTier,
@@ -116,7 +118,7 @@ async function writeStoredToken(
     [expiryKey]: expiresAt,
   };
 
-  // For read-limited flow, also cache the authenticated user's ORCID iD
+  // If this token is from a user login flow, then also store the user’s ORCID ID
   if (tier === "read-limited" && response.orcid) {
     update[KEYS.readLimitedOrcidId] = response.orcid;
   }
@@ -137,11 +139,7 @@ async function writeStoredToken(
 // ─── Token Fetchers ───────────────────────────────────────────────────────────
 
 /**
- * Fetches a fresh read-public token via the client_credentials OAuth flow.
- * This is a machine-to-machine flow — no user interaction required.
- *
- * Token lifetime is typically 20 years for read-public, but we still
- * cache and check expiry correctly just in case.
+ * Make Http call to orcid to fetch token with client id and secret
  */
 async function fetchReadPublicToken(
   useSandbox = false,
@@ -184,10 +182,8 @@ async function fetchReadPublicToken(
 /**
  * Returns a valid read-public access token.
  *
- * Uses the cached token if still fresh, otherwise fetches a new one.
- * This is the function called by orcidApiClient.ts for every API request.
- *
- * @param useSandbox - set true during development to hit sandbox.orcid.org
+ * Checks in cache, if available return it
+ * else fetch it and update it in storage
  */
 export async function getReadPublicToken(useSandbox = false): Promise<string> {
   // Try cache first
@@ -203,11 +199,7 @@ export async function getReadPublicToken(useSandbox = false): Promise<string> {
 }
 
 /**
- * Clears all cached ORCID tokens from storage.
- * Useful for:
- *   - Logout / uninstall cleanup
- *   - Forcing a token refresh during debugging
- *   - Switching between sandbox and production
+ * Simply removes all cached ORCID tokens from storage.
  */
 export async function clearAllTokens(): Promise<void> {
   await chrome.storage.local.remove(Object.values(KEYS));
@@ -215,9 +207,7 @@ export async function clearAllTokens(): Promise<void> {
 }
 
 /**
- * Checks whether a valid read-public token is currently cached.
- * Does NOT fetch a new one — use getReadPublicToken() for that.
- * Useful for status indicators in the popup UI.
+ * Checks if a valid read-public token is currently cached
  */
 export async function hasValidReadPublicToken(): Promise<boolean> {
   const cached = await readStoredToken("read-public");
@@ -225,9 +215,8 @@ export async function hasValidReadPublicToken(): Promise<boolean> {
 }
 
 /**
- * Returns the expiry timestamp of the cached read-public token,
- * or null if none is cached. Useful for showing "token expires in X"
- * in the extension popup/settings page.
+ * Returns the expiry timestamp of the cached read-public token
+ * or null if none is cached
  */
 export async function getTokenExpiry(): Promise<Date | null> {
   const stored = await chrome.storage.local.get([KEYS.readPublicExpiry]);
@@ -239,7 +228,8 @@ export async function getTokenExpiry(): Promise<Date | null> {
  * Pre-warms the token cache. Call this from background.ts on install
  * or on browser startup so the first profile scrape doesn't have to
  * wait for a token fetch.
- *
+ * Make sure token is ready BEFORE it’s needed
+ * 
  * Usage in background.ts:
  *   chrome.runtime.onInstalled.addListener(() => prewarmToken());
  *   chrome.runtime.onStartup.addListener(() => prewarmToken());

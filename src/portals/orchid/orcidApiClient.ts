@@ -15,7 +15,7 @@ const ORCID_API_BASE = "https://pub.orcid.org/v3.0";
 const ORCID_TOKEN_URL = "https://orcid.org/oauth/token";
 
 /**
- * Wraps chrome.runtime.sendMessage with a timeout so calls can't hang forever.
+ * Function to make call from background script which runs forever and can make api call without cors error
  */
 function sendMessageWithTimeout<T>(
   message: unknown,
@@ -103,6 +103,7 @@ export interface OrcidAuthorResult {
  */
 const TOKEN_STORAGE_KEY = "orcid_read_public_token";
 const TOKEN_EXPIRY_KEY = "orcid_token_expiry";
+
 
 /**
  * Fetches a fresh read-public token via the background service worker.
@@ -197,7 +198,7 @@ export async function fetchWorkSummaries(
 
   const data = await orcidGet<RawWorksResponse>(`/${orcidId}/works`);
   if (!data?.group) return [];
-
+  // console.log("Data", data)
   const summaries: OrcidWorkSummary[] = [];
 
   for (const group of data.group) {
@@ -218,6 +219,8 @@ export async function fetchWorkSummaries(
   console.log(
     `[OrcidClient] Fetched ${summaries.length} work summaries for ${orcidId}`,
   );
+
+  // console.log("Summeries",summaries)
   return summaries;
 }
 

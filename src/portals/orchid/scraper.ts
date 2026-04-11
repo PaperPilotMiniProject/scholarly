@@ -28,6 +28,7 @@ import type { S2PaperStats } from "../../services/semanticScholar";
 
 // ─── Background Fetch Helpers ─────────────────────────────────────────────────
 
+// Gets stats of a paper from Semantic Scholar through background script
 async function getS2StatsByDoi(doi: string): Promise<S2PaperStats | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -176,7 +177,7 @@ async function waitForWorksSection(
   }
 
   // Proceed anyway — API fetch doesn't depend on DOM being fully rendered
-  console.warn(
+  console.log(
     "[Scholarly][ORCID] Works section not found after polling, proceeding with API fetch anyway",
   );
   return false;
