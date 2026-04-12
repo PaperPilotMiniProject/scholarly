@@ -15,12 +15,24 @@ export default defineContentScript({
     await new Promise((resolve) => setTimeout(resolve, 5000));
     console.log("[Scholarly][ORCID] Initial delay complete, proceeding...");
 
-    // Only run on actual ORCID profile pages
-    const orcidId = extractOrcidId(window.location.href);
-    if (!orcidId) {
-      console.log("[Scholarly][ORCID] Not a profile page, exiting");
-      return;
-    }
+    const handleUrlChange = async () => {
+      const url = window.location.href;
+      const orcidId = extractOrcidId(url);
+
+      if (!orcidId) {
+        console.log("[Scholarly][ORCID] Not a profile page");
+        clearOrcidBadges();
+        return;
+      }
+
+      console.log("[Scholarly][ORCID] Profile detected:", orcidId);
+
+      getOrcidEnabled()
+        .then((enabled) => maybeScrape(enabled))
+        .catch(() => maybeScrape(true));
+    };
+
+    await handleUrlChange();
 
     let runGeneration = 0;
     const nextGeneration = () => { runGeneration += 1; return runGeneration; };
@@ -34,6 +46,30 @@ export default defineContentScript({
         clearOrcidBadges();
       }
     };
+
+    let lastUrl = window.location.href;
+
+    setInterval(() => {
+      const currentUrl = window.location.href;
+
+      if (currentUrl !== lastUrl) {
+        console.log("[Scholarly][ORCID] URL changed:", currentUrl);
+        lastUrl = currentUrl;
+
+        // cancel previous run
+        nextGeneration();
+
+        const orcidId = extractOrcidId(currentUrl);
+        if (!orcidId) {
+          clearOrcidBadges();
+          return;
+        }
+
+        getOrcidEnabled()
+          .then((enabled) => maybeScrape(enabled))
+          .catch(() => maybeScrape(true));
+      }
+    }, 1000);
 
     // Read initial enabled state
     getOrcidEnabled()
@@ -52,3 +88,4 @@ export default defineContentScript({
     });
   },
 });
+
