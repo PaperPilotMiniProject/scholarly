@@ -1,7 +1,7 @@
 /// <reference types="chrome" />
 
 import { getScopusEnabled } from "../utils/storage";
-import { getScopusRankingByDoi } from "../utils/csvParser";
+import { getScopusAbstractByDoi, getScopusRankingByDoi } from "../utils/csvParser";
 
 const DOI_REGEX = /10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i;
 const YEAR_PANEL_ID = "scholarly-scopus-year-panel";
@@ -316,15 +316,12 @@ function injectYearChartPanel(articles) {
 	const firstArticle = articles.find((article) => article.container);
 	const resultsHost =
 		firstArticle?.container?.closest("[data-testid='results-list'], [data-testid='search-results-list']") ||
-		firstArticle?.container?.closest("main, [role='main'], section") ||
-		firstArticle?.container?.parentElement;
+		firstArticle?.container?.parentElement ||
+		firstArticle?.container?.closest("main, [role='main'], section");
 
 	if (!resultsHost) return;
 
-	if (
-		firstArticle?.container &&
-		resultsHost.contains(firstArticle.container)
-	) {
+	if (firstArticle?.container?.parentElement === resultsHost) {
 		resultsHost.insertBefore(panel, firstArticle.container);
 		return;
 	}
@@ -358,6 +355,10 @@ function findDoiInContainer(container) {
 function findTitleElement(container) {
 	if (!container) return null;
 	return (
+		container.querySelector("[data-testid*='title'] a") ||
+		container.querySelector("a[data-testid*='title']") ||
+		container.querySelector("a[href*='/record/']") ||
+		container.querySelector("a[href*='/record/display.uri']") ||
 		container.querySelector("[data-test='result-title']") ||
 		container.querySelector(".ddmDocTitle") ||
 		container.querySelector("h2 a, h3 a") ||
@@ -365,6 +366,69 @@ function findTitleElement(container) {
 		container.querySelector("a")
 
 	);
+}
+
+function toArray(value) {
+	if (!value) return [];
+	return Array.isArray(value) ? value : [value];
+}
+
+function normalizeAuthorName(name) {
+	return String(name || "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/,+$/, "");
+}
+
+function formatAuthorName(author) {
+	if (!author) return "";
+
+	const indexed = normalizeAuthorName(author["ce:indexed-name"] || author["dc:creator"] || "");
+	if (indexed) return indexed;
+
+	const surname = normalizeAuthorName(author["ce:surname"] || author.surname || "");
+	const given = normalizeAuthorName(
+		author["ce:given-name"] || author["ce:initials"] || author["preferred-name"]?.["ce:given-name"] || "",
+	);
+
+	if (surname && given) return `${surname}, ${given}`;
+	return surname || given;
+}
+
+async function fetchAuthorsByDoi(doi) {
+	try {
+		const response = await getScopusAbstractByDoi(doi);
+		if (!response?.success) return { firstAuthor: "", lastAuthor: "" };
+
+		const names = [];
+		const seen = new Set();
+
+		const groups = toArray(response.authorGroup);
+		groups.forEach((group) => {
+			toArray(group?.author).forEach((author) => {
+				const formatted = formatAuthorName(author);
+				if (!formatted) return;
+				const key = formatted.toLowerCase();
+				if (seen.has(key)) return;
+				seen.add(key);
+				names.push(formatted);
+			});
+		});
+
+		if (!names.length && response.correspondence?.author) {
+			const correspondenceName = formatAuthorName(response.correspondence.author);
+			if (correspondenceName) names.push(correspondenceName);
+		}
+
+		if (!names.length) return { firstAuthor: "", lastAuthor: "" };
+		return {
+			firstAuthor: names[0] || "",
+			lastAuthor: names[names.length - 1] || "",
+		};
+	} catch (err) {
+		console.warn(`[Scholarly][Scopus] Author API lookup failed for DOI ${doi}:`, err);
+		return { firstAuthor: "", lastAuthor: "" };
+	}
 }
 async function getDoiFromTitle(title) {
   try {
@@ -413,35 +477,91 @@ async function getDoiFromTitle(title) {
 }
 const SELECTOR = `
 	a[href*="/pages/publications/"],
-	a[href*="/record/display.uri"]
+	a[href*="/record/display.uri"],
+	a[href*="/record/"],
+	a[data-testid*="title"]
 `;
+
+const RESULT_CONTAINER_SELECTOR = `
+	[data-testid='results-list-item'],
+	[data-testid*='result-item'],
+	li[data-testid*='result'],
+	article
+`;
+
+function isLikelyPublicationLink(el) {
+	const href = String(el?.getAttribute?.("href") || "");
+	if (!href) return false;
+
+	if (
+		href.includes("/record/display.uri") ||
+		href.includes("/record/") ||
+		href.includes("/pages/publications/")
+	) {
+		return true;
+	}
+
+	return false;
+}
 
 // Collect article cards from the Scopus results list.
 function collectArticles() {
 	const articles = [];
-	const seenTitles = new Set();
+	const seenKeys = new Set();
 
-	document.querySelectorAll(SELECTOR).forEach((el) => {
-		const title = el.innerText?.trim();
-		if (!title || seenTitles.has(title)) return;
-		seenTitles.add(title);
+	// Prefer scanning result rows first; this survives link/DOM changes better.
+	document.querySelectorAll(RESULT_CONTAINER_SELECTOR).forEach((container) => {
+		const titleEl = findTitleElement(container);
+		if (!titleEl || !isLikelyPublicationLink(titleEl)) return;
+		const title = titleEl?.innerText?.trim() || titleEl?.textContent?.trim() || "";
+		if (!title || title.length < 5) return;
 
-		const container =
-			el.closest("[data-testid='results-list-item']") ||
-			el.closest("article") ||
-			el.closest("li") ||
-			el.closest("tr") ||
-			el.parentElement ||
-			el;
+		const href = titleEl?.getAttribute?.("href") || "";
+		const key = `${title.toLowerCase()}|${href}`;
+		if (seenKeys.has(key)) return;
+		seenKeys.add(key);
+
 		const year = extractArticleYear(container);
-
 		articles.push({
 			title,
 			container,
-			titleEl: el,
+			titleEl: titleEl || container,
+			firstAuthor: "",
+			lastAuthor: "",
 			year,
 		});
 	});
+
+	if (!articles.length) {
+		document.querySelectorAll(SELECTOR).forEach((el) => {
+			if (!isLikelyPublicationLink(el)) return;
+			const title = el.innerText?.trim() || el.textContent?.trim() || "";
+			if (!title || title.length < 5) return;
+
+			const href = el.getAttribute?.("href") || "";
+			const key = `${title.toLowerCase()}|${href}`;
+			if (seenKeys.has(key)) return;
+			seenKeys.add(key);
+
+			const container =
+				el.closest("[data-testid='results-list-item']") ||
+				el.closest("article") ||
+				el.closest("li") ||
+				el.closest("tr") ||
+				el.parentElement ||
+				el;
+			const year = extractArticleYear(container);
+
+			articles.push({
+				title,
+				container,
+				titleEl: el,
+				firstAuthor: "",
+				lastAuthor: "",
+				year,
+			});
+		});
+	}
 
 	console.log("Articles found:", articles.length);
 
@@ -505,6 +625,18 @@ async function annotateArticle(article, scopusRanking) {
 				: "#6c757d",
 	);
 
+	const firstAuthorBadge = document.createElement("span");
+	firstAuthorBadge.textContent = article.firstAuthor
+		? `1st: ${article.firstAuthor}`
+		: "1st: -";
+	firstAuthorBadge.style.cssText = badgeStyle(article.firstAuthor ? "#5b21b6" : "#6c757d");
+
+	const lastAuthorBadge = document.createElement("span");
+	lastAuthorBadge.textContent = article.lastAuthor
+		? `Last: ${article.lastAuthor}`
+		: "Last: -";
+	lastAuthorBadge.style.cssText = badgeStyle(article.lastAuthor ? "#7c3aed" : "#6c757d");
+
 	const cardToggle = document.createElement("button");
 	cardToggle.type = "button";
 	cardToggle.textContent = "Ranking card";
@@ -526,7 +658,17 @@ async function annotateArticle(article, scopusRanking) {
 		container.appendChild(cardEl);
 	});
 
-	container.append(cardToggle, quartileBadge, hIndexBadge, snip, cite, oa, sjr);
+	container.append(
+		cardToggle,
+		quartileBadge,
+		firstAuthorBadge,
+		lastAuthorBadge,
+		hIndexBadge,
+		snip,
+		cite,
+		oa,
+		sjr,
+	);
 
 	const insertionHost = article.titleEl.parentElement || article.container || article.titleEl;
 	insertionHost.insertAdjacentElement("afterend", container);
@@ -583,6 +725,10 @@ async function scrapeScopus(shouldContinue) {
 			}
 
 			console.log(`[Scholarly][Scopus] → DOI: ${doi} | Title: ${article.title.slice(0, 120)}`);
+
+			const authorData = await fetchAuthorsByDoi(doi);
+			article.firstAuthor = authorData.firstAuthor || "";
+			article.lastAuthor = authorData.lastAuthor || "";
 
 			const ranking = await getScopusRankingByDoi(doi);
 			if (ranking) {
